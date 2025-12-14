@@ -1,0 +1,10 @@
+python-telegram-bot==20.7
+JPype1==1.5.0
+PyYAML==6.0.1
+schedule==1.2.0
+asyncio-mqtt==0.16.1
+pydantic==2.5.0
+loguru==0.7.2
+aiofiles==23.2.1
+fastapi==0.104.1
+uvicorn==0.24.0

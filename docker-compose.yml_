@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  migr-telegram:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: migr-telegram-bot
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-8090}:8090"  # Веб-интерфейс
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro  # Конфигурация (только чтение)
+      - ./logs:/app/logs  # Логи
+      - ./data:/app/data  # База данных уведомлений
+      - ./lib:/app/lib:ro  # JDBC драйверы (только чтение)
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_ADMIN_USER_ID=${TELEGRAM_ADMIN_USER_ID}
+      - DATABASE_URL=${DATABASE_URL}
+      - DATABASE_USER=${DATABASE_USER}
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    env_file:
+      - .env  # Загружаем переменные из .env файла
+    networks:
+      - migr-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/api/stats"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+networks:
+  migr-network:
+    driver: bridge
+
+# Если нужна локальная PostgreSQL для тестирования, раскомментируйте:
+# services:
+#   postgres:
+#     image: postgres:14
+#     container_name: migr-postgres
+#     restart: unless-stopped
+#     environment:
+#       POSTGRES_DB: migration
+#       POSTGRES_USER: migration
+#       POSTGRES_PASSWORD: migration
+#     ports:
+#       - "5432:5432"
+#     volumes:
+#       - postgres_data:/var/lib/postgresql/data
+#     networks:
+#       - migr-network
+#
+# volumes:
+#   postgres_data:

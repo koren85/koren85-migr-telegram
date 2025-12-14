@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "/Users/aleksandrcernaev/projects/migr-telegram/main.py", line 15, in <module>
+    from loguru import logger
+ModuleNotFoundError: No module named 'loguru'
