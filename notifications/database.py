@@ -5,7 +5,7 @@ from typing import List, Optional, Dict, Any
 from pathlib import Path
 from loguru import logger
 
-from .models import NotificationRule, NotificationHistory, ConditionType, NotificationPriority
+from .models import NotificationRule, NotificationHistory, ConditionType, NotificationPriority, DatabaseMonitorConfig
 
 
 class NotificationDatabase:
@@ -75,7 +75,44 @@ class NotificationDatabase:
                     UNIQUE(monitor_name, db_name)
                 )
             """)
-            
+
+            # Table for monitor configurations
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS monitors (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    db_name TEXT NOT NULL,
+                    sql_query TEXT NOT NULL,
+                    check_interval INTEGER NOT NULL DEFAULT 60,
+                    is_active BOOLEAN NOT NULL DEFAULT 1,
+                    driver TEXT,
+                    url TEXT,
+                    username TEXT,
+                    password TEXT,
+                    jar_path TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(name, db_name)
+                )
+            """)
+
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_monitors_active
+                ON monitors (is_active, db_name)
+            """)
+
+            # Table to track migrated monitors from config.yaml
+            # This prevents re-creating monitors that were intentionally deleted
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS migration_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    monitor_name TEXT NOT NULL,
+                    db_name TEXT NOT NULL,
+                    migrated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(monitor_name, db_name)
+                )
+            """)
+
             conn.commit()
     
     def create_rule(self, rule: NotificationRule) -> int:
@@ -111,8 +148,7 @@ class NotificationDatabase:
             params.append(monitor_name)
         
         if db_name:
-            # Match exact db_name OR rules with empty db_name (applies to all DBs)
-            query += " AND (db_name = ? OR db_name = '' OR db_name IS NULL)"
+            query += " AND db_name = ?"
             params.append(db_name)
             
         if active_only:
@@ -293,4 +329,185 @@ class NotificationDatabase:
                 'active_rules': active_rules,
                 'recent_notifications_24h': recent_notifications,
                 'success_rate_7d': round(success_rate, 2)
-            }
+            }# CRUD methods for monitors - to be merged into database.py
+
+    def create_monitor(self, monitor: DatabaseMonitorConfig) -> int:
+        """Create a new monitor configuration"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("""
+                INSERT INTO monitors
+                (name, db_name, sql_query, check_interval, is_active,
+                 driver, url, username, password, jar_path)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                monitor.name, monitor.db_name, monitor.sql_query,
+                monitor.check_interval, monitor.is_active,
+                monitor.driver, monitor.url, monitor.username,
+                monitor.password, monitor.jar_path
+            ))
+
+            monitor_id = cursor.lastrowid
+            conn.commit()
+            logger.info(f"Created monitor: {monitor.name} (ID: {monitor_id})")
+            return monitor_id
+
+    def get_monitors(self, db_name: str = None, active_only: bool = True) -> List[DatabaseMonitorConfig]:
+        """Get monitor configurations"""
+        query = "SELECT * FROM monitors WHERE 1=1"
+        params = []
+
+        if db_name:
+            query += " AND db_name = ?"
+            params.append(db_name)
+
+        if active_only:
+            query += " AND is_active = 1"
+
+        query += " ORDER BY db_name, name"
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(query, params)
+
+            monitors = []
+            for row in cursor.fetchall():
+                monitor = DatabaseMonitorConfig(
+                    id=row['id'],
+                    name=row['name'],
+                    db_name=row['db_name'],
+                    sql_query=row['sql_query'],
+                    check_interval=row['check_interval'],
+                    is_active=bool(row['is_active']),
+                    driver=row['driver'],
+                    url=row['url'],
+                    username=row['username'],
+                    password=row['password'],
+                    jar_path=row['jar_path'],
+                    created_at=datetime.fromisoformat(row['created_at']) if row['created_at'] else None,
+                    updated_at=datetime.fromisoformat(row['updated_at']) if row['updated_at'] else None
+                )
+                monitors.append(monitor)
+
+            return monitors
+
+    def get_monitor_by_id(self, monitor_id: int) -> Optional[DatabaseMonitorConfig]:
+        """Get monitor by ID"""
+        monitors = self.get_monitors(active_only=False)
+        for monitor in monitors:
+            if monitor.id == monitor_id:
+                return monitor
+        return None
+
+    def update_monitor(self, monitor: DatabaseMonitorConfig) -> bool:
+        """Update monitor configuration"""
+        if not monitor.id:
+            return False
+
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("""
+                UPDATE monitors SET
+                    name = ?, db_name = ?, sql_query = ?,
+                    check_interval = ?, is_active = ?,
+                    driver = ?, url = ?, username = ?, password = ?, jar_path = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            """, (
+                monitor.name, monitor.db_name, monitor.sql_query,
+                monitor.check_interval, monitor.is_active,
+                monitor.driver, monitor.url, monitor.username,
+                monitor.password, monitor.jar_path,
+                monitor.id
+            ))
+
+            success = cursor.rowcount > 0
+            conn.commit()
+
+            if success:
+                logger.info(f"Updated monitor: {monitor.name} (ID: {monitor.id})")
+            return success
+
+    def delete_monitor(self, monitor_id: int) -> bool:
+        """Delete monitor configuration"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("DELETE FROM monitors WHERE id = ?", (monitor_id,))
+            success = cursor.rowcount > 0
+            conn.commit()
+
+            if success:
+                logger.info(f"Deleted monitor ID: {monitor_id}")
+            return success
+
+    def monitor_exists(self, name: str, db_name: str) -> bool:
+        """Check if monitor with given name and db_name exists"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("""
+                SELECT 1 FROM monitors
+                WHERE name = ? AND db_name = ?
+            """, (name, db_name))
+            return cursor.fetchone() is not None
+
+    def migrate_from_config(self, settings) -> int:
+        """Migrate monitors from config.yaml to database (one-time operation)"""
+        migrated_count = 0
+
+        for db_config in settings.databases:
+            for table_config in db_config.tables:
+                # Get monitor name
+                if hasattr(table_config, 'name') and table_config.name:
+                    monitor_name = table_config.name
+                else:
+                    monitor_name = f"{table_config.table}.{table_config.column}"
+
+                # Check if monitor was already migrated (even if later deleted)
+                if self._is_already_migrated(monitor_name, db_config.name):
+                    logger.debug(f"Monitor already migrated (skipping): {monitor_name} ({db_config.name})")
+                    continue
+
+                # Prepare SQL query
+                if hasattr(table_config, 'sql_query') and table_config.sql_query:
+                    sql_query = table_config.sql_query
+                else:
+                    sql_query = f"SELECT {table_config.column} FROM {table_config.table} LIMIT 1"
+
+                # Create monitor from config
+                monitor = DatabaseMonitorConfig(
+                    name=monitor_name,
+                    db_name=db_config.name,
+                    sql_query=sql_query,
+                    check_interval=table_config.check_interval,
+                    is_active=True,
+                    driver=db_config.driver,
+                    url=db_config.url,
+                    username=db_config.username,
+                    password=db_config.password,
+                    jar_path=db_config.jar_path
+                )
+
+                self.create_monitor(monitor)
+
+                # Mark as migrated
+                self._mark_as_migrated(monitor_name, db_config.name)
+
+                migrated_count += 1
+                logger.info(f"Migrated monitor from config: {monitor_name} ({db_config.name})")
+
+        return migrated_count
+
+    def _is_already_migrated(self, monitor_name: str, db_name: str) -> bool:
+        """Check if monitor was already migrated from config.yaml"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "SELECT COUNT(*) FROM migration_history WHERE monitor_name = ? AND db_name = ?",
+                (monitor_name, db_name)
+            )
+            count = cursor.fetchone()[0]
+            return count > 0
+
+    def _mark_as_migrated(self, monitor_name: str, db_name: str):
+        """Mark monitor as migrated from config.yaml"""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO migration_history (monitor_name, db_name) VALUES (?, ?)",
+                (monitor_name, db_name)
+            )
+            conn.commit()

@@ -23,6 +23,26 @@ class ConditionType(Enum):
 
 
 @dataclass
+class DatabaseMonitorConfig:
+    """Monitor configuration stored in database"""
+    id: Optional[int] = None
+    name: str = ""  # Display name (e.g., "Воронеж 1 задача")
+    db_name: str = ""  # Database name (e.g., "voron_migr_db")
+    sql_query: str = ""  # SQL query to execute
+    check_interval: int = 60  # Check interval in seconds
+    is_active: bool = True
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    # Database connection info (optional, can inherit from db_name config)
+    driver: Optional[str] = None
+    url: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    jar_path: Optional[str] = None
+
+
+@dataclass
 class NotificationRule:
     """Notification rule configuration"""
     id: Optional[int] = None

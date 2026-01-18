@@ -29,8 +29,6 @@ class RuleCreate(BaseModel):
 
 class RuleUpdate(BaseModel):
     name: Optional[str] = None
-    monitor_name: Optional[str] = None
-    db_name: Optional[str] = None
     condition_type: Optional[ConditionType] = None
     condition_value: Optional[str] = None
     condition_duration: Optional[int] = None
@@ -39,6 +37,31 @@ class RuleUpdate(BaseModel):
     message_template: Optional[str] = None
     target_chats: Optional[str] = None
     is_active: Optional[bool] = None
+
+
+class MonitorCreate(BaseModel):
+    name: str
+    db_name: str
+    sql_query: str
+    check_interval: int = 60
+    is_active: bool = True
+    driver: Optional[str] = None
+    url: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    jar_path: Optional[str] = None
+
+
+class MonitorUpdate(BaseModel):
+    name: Optional[str] = None
+    sql_query: Optional[str] = None
+    check_interval: Optional[int] = None
+    is_active: Optional[bool] = None
+    driver: Optional[str] = None
+    url: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    jar_path: Optional[str] = None
 
 
 class NotificationStats(BaseModel):
@@ -97,7 +120,7 @@ def create_app(rules_engine: NotificationRulesEngine = None, app_instance = None
         </head>
         <body>
             <div id="app"></div>
-            <script src="/static/app.js?v=1.4"></script>
+            <script src="/static/app.js?v=2.0"></script>
         </body>
         </html>
         """
@@ -109,7 +132,17 @@ def create_app(rules_engine: NotificationRulesEngine = None, app_instance = None
         """Get notification statistics"""
         stats = db.get_stats()
         return NotificationStats(**stats)
-    
+
+    @app.get("/api/queue/stats", response_model=dict)
+    async def get_queue_stats():
+        """Get notification queue statistics (rate limiting, pending messages, etc.)"""
+        if app_instance and hasattr(app_instance, 'notification_queue') and app_instance.notification_queue:
+            return app_instance.notification_queue.get_stats()
+        return {
+            'running': False,
+            'error': 'Notification queue not available'
+        }
+
     @app.get("/api/rules", response_model=List[NotificationRule])
     async def get_rules(
         monitor_name: Optional[str] = None,
@@ -179,6 +212,37 @@ def create_app(rules_engine: NotificationRulesEngine = None, app_instance = None
         
         return {"message": "Rule deleted successfully"}
     
+    @app.post("/api/rules/{rule_id}/copy", response_model=dict)
+    async def copy_rule(
+        rule_id: int,
+        db: NotificationDatabase = Depends(get_database)
+    ):
+        """Copy notification rule with new name"""
+        # Get existing rule
+        existing_rules = db.get_rules(active_only=False)
+        existing_rule = next((r for r in existing_rules if r.id == rule_id), None)
+        
+        if not existing_rule:
+            raise HTTPException(status_code=404, detail="Rule not found")
+        
+        # Create a copy with modified name
+        new_rule = NotificationRule(
+            name=f"{existing_rule.name} (копия)",
+            monitor_name=existing_rule.monitor_name,
+            db_name=existing_rule.db_name,
+            condition_type=existing_rule.condition_type,
+            condition_value=existing_rule.condition_value,
+            condition_duration=existing_rule.condition_duration,
+            cooldown_seconds=existing_rule.cooldown_seconds,
+            priority=existing_rule.priority,
+            message_template=existing_rule.message_template,
+            target_chats=existing_rule.target_chats,
+            is_active=existing_rule.is_active
+        )
+        
+        new_rule_id = db.create_rule(new_rule)
+        return {"id": new_rule_id, "message": "Rule copied successfully"}
+    
     @app.delete("/api/monitors/{monitor_name}/disable")
     async def disable_monitor(
         monitor_name: str,
@@ -234,14 +298,14 @@ def create_app(rules_engine: NotificationRulesEngine = None, app_instance = None
         """Get notification history"""
         return db.get_notification_history(limit=limit, monitor_name=monitor_name)
     
-    @app.get("/api/monitors", response_model=Dict[str, Any])
-    async def get_monitors(
+    @app.get("/api/monitor-states", response_model=Dict[str, Any])
+    async def get_monitor_states(
         engine: NotificationRulesEngine = Depends(get_rules_engine),
         db: NotificationDatabase = Depends(get_database)
     ):
-        """Get current monitor states with disable status"""
+        """Get current monitor states with disable status (legacy endpoint for runtime states)"""
         monitor_data = {}
-        
+
         # Get data from notification engine states
         states = engine.get_monitor_states()
         for key, state in states.items():
@@ -256,14 +320,14 @@ def create_app(rules_engine: NotificationRulesEngine = None, app_instance = None
                 "is_disabled": db.is_monitor_disabled(state.monitor_name, state.db_name),
                 "source": "rules_engine"
             }
-        
+
         # If app_instance is available, also get data from database monitors
         if app_instance and hasattr(app_instance, 'monitors'):
             for db_name, monitor in app_instance.monitors.items():
                 if hasattr(monitor, 'monitor_states'):
                     for monitor_key, db_state in monitor.monitor_states.items():
                         key = f"{db_name}.{db_state.monitor_name}"
-                        
+
                         # Create combined view
                         current_value = getattr(db_state, 'last_value', 'Unknown')
                         monitor_data[key] = {
@@ -278,8 +342,336 @@ def create_app(rules_engine: NotificationRulesEngine = None, app_instance = None
                             "source": "database_monitor",
                             "check_interval": getattr(db_state, 'check_interval', 60)
                         }
-        
+
         return monitor_data
+
+    @app.get("/api/monitors")
+    async def get_monitors_list(db: NotificationDatabase = Depends(get_database)):
+        """Get all monitors from database"""
+        try:
+            from notifications.models import DatabaseMonitorConfig
+            monitors = db.get_monitors(active_only=False)
+            return [{
+                "id": m.id,
+                "name": m.name,
+                "db_name": m.db_name,
+                "sql_query": m.sql_query,
+                "check_interval": m.check_interval,
+                "is_active": m.is_active,
+                "driver": m.driver,
+                "url": m.url,
+                "username": m.username,
+                "password": m.password,
+                "jar_path": m.jar_path,
+                "created_at": m.created_at.isoformat() if m.created_at else None,
+                "updated_at": m.updated_at.isoformat() if m.updated_at else None
+            } for m in monitors]
+        except Exception as e:
+            logger.error(f"Error getting monitors: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/api/monitors", response_model=dict)
+    async def create_monitor(
+        monitor_data: MonitorCreate,
+        db: NotificationDatabase = Depends(get_database)
+    ):
+        """Create new monitor"""
+        try:
+            from notifications.models import DatabaseMonitorConfig
+
+            # Check if monitor already exists
+            if db.monitor_exists(monitor_data.name, monitor_data.db_name):
+                raise HTTPException(status_code=400, detail="Monitor with this name already exists for this database")
+
+            monitor = DatabaseMonitorConfig(
+                name=monitor_data.name,
+                db_name=monitor_data.db_name,
+                sql_query=monitor_data.sql_query,
+                check_interval=monitor_data.check_interval,
+                is_active=monitor_data.is_active,
+                driver=monitor_data.driver,
+                url=monitor_data.url,
+                username=monitor_data.username,
+                password=monitor_data.password,
+                jar_path=monitor_data.jar_path
+            )
+
+            monitor_id = db.create_monitor(monitor)
+
+            # If app_instance has monitor_manager, reload monitors
+            if app_instance and hasattr(app_instance, 'monitor_manager'):
+                await app_instance.monitor_manager.reload_all_monitors()
+
+            return {"id": monitor_id, "message": "Monitor created successfully"}
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error creating monitor: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.put("/api/monitors/{monitor_id}", response_model=dict)
+    async def update_monitor(
+        monitor_id: int,
+        monitor_data: MonitorUpdate,
+        db: NotificationDatabase = Depends(get_database)
+    ):
+        """Update monitor"""
+        try:
+            from notifications.models import DatabaseMonitorConfig
+
+            # Get existing monitor
+            existing_monitor = db.get_monitor_by_id(monitor_id)
+            if not existing_monitor:
+                raise HTTPException(status_code=404, detail="Monitor not found")
+
+            # Update fields
+            for field, value in monitor_data.model_dump(exclude_unset=True).items():
+                setattr(existing_monitor, field, value)
+
+            success = db.update_monitor(existing_monitor)
+            if not success:
+                raise HTTPException(status_code=500, detail="Failed to update monitor")
+
+            # If app_instance has monitor_manager, reload this monitor
+            if app_instance and hasattr(app_instance, 'monitor_manager'):
+                await app_instance.monitor_manager.reload_monitor(monitor_id)
+
+            return {"message": "Monitor updated successfully"}
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error updating monitor: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.delete("/api/monitors/{monitor_id}", response_model=dict)
+    async def delete_monitor(
+        monitor_id: int,
+        db: NotificationDatabase = Depends(get_database)
+    ):
+        """Delete monitor and all associated rules"""
+        try:
+            # Get monitor first to check if it exists
+            monitor = db.get_monitor_by_id(monitor_id)
+            if not monitor:
+                raise HTTPException(status_code=404, detail="Monitor not found")
+
+            # Delete all rules associated with this monitor
+            rules = db.get_rules(monitor_name=monitor.name, db_name=monitor.db_name, active_only=False)
+            deleted_rules = 0
+            for rule in rules:
+                if db.delete_rule(rule.id):
+                    deleted_rules += 1
+
+            # Stop monitor if running
+            if app_instance and hasattr(app_instance, 'monitor_manager'):
+                await app_instance.monitor_manager.stop_monitor(monitor_id)
+
+            # Delete from database
+            success = db.delete_monitor(monitor_id)
+            if not success:
+                raise HTTPException(status_code=500, detail="Failed to delete monitor")
+
+            return {
+                "message": "Monitor and associated rules deleted successfully",
+                "deleted_rules": deleted_rules
+            }
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error deleting monitor: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/api/monitors/{monitor_id}/copy", response_model=dict)
+    async def copy_monitor(
+        monitor_id: int,
+        db: NotificationDatabase = Depends(get_database)
+    ):
+        """Copy monitor with new name"""
+        try:
+            from notifications.models import DatabaseMonitorConfig
+            
+            # Get existing monitor
+            existing_monitor = db.get_monitor_by_id(monitor_id)
+            if not existing_monitor:
+                raise HTTPException(status_code=404, detail="Monitor not found")
+            
+            # Generate unique name for copy
+            base_name = f"{existing_monitor.name} (копия)"
+            copy_name = base_name
+            counter = 2
+            while db.monitor_exists(copy_name, existing_monitor.db_name):
+                copy_name = f"{base_name} {counter}"
+                counter += 1
+            
+            # Create a copy
+            new_monitor = DatabaseMonitorConfig(
+                name=copy_name,
+                db_name=existing_monitor.db_name,
+                sql_query=existing_monitor.sql_query,
+                check_interval=existing_monitor.check_interval,
+                is_active=False,  # Disabled by default for safety
+                driver=existing_monitor.driver,
+                url=existing_monitor.url,
+                username=existing_monitor.username,
+                password=existing_monitor.password,
+                jar_path=existing_monitor.jar_path
+            )
+            
+            new_monitor_id = db.create_monitor(new_monitor)
+            return {"id": new_monitor_id, "message": "Monitor copied successfully"}
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error copying monitor: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/api/monitors/{monitor_id}/test", response_model=dict)
+    async def test_monitor(
+        monitor_id: int,
+        db: NotificationDatabase = Depends(get_database)
+    ):
+        """Test monitor by executing its SQL query"""
+        try:
+            from database.connection import DatabaseConnection
+            from config.settings import DatabaseConfig
+
+            # Get monitor
+            monitor = db.get_monitor_by_id(monitor_id)
+            if not monitor:
+                raise HTTPException(status_code=404, detail="Monitor not found")
+
+            # Create temporary database connection
+            db_config = DatabaseConfig(
+                name=monitor.db_name,
+                driver=monitor.driver or "",
+                url=monitor.url or "",
+                username=monitor.username or "",
+                password=monitor.password or "",
+                jar_path=monitor.jar_path or "",
+                tables=[]
+            )
+
+            connection = DatabaseConnection(db_config)
+
+            try:
+                # Try to connect
+                if not connection.connect():
+                    return {
+                        "success": False,
+                        "error": "Failed to connect to database",
+                        "monitor_name": monitor.name
+                    }
+
+                # Execute query
+                result = connection.execute_query(monitor.sql_query)
+
+                if result is None:
+                    return {
+                        "success": False,
+                        "error": "Query returned no result (connection or query error)",
+                        "monitor_name": monitor.name
+                    }
+
+                return {
+                    "success": True,
+                    "result": str(result),
+                    "monitor_name": monitor.name,
+                    "message": "Monitor test successful"
+                }
+
+            finally:
+                # Always disconnect
+                connection.disconnect()
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error testing monitor: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "monitor_name": monitor.name if 'monitor' in locals() else "unknown"
+            }
+
+    @app.post("/api/rules/bulk-delete", response_model=dict)
+    async def bulk_delete_rules(
+        rule_ids: List[int],
+        db: NotificationDatabase = Depends(get_database)
+    ):
+        """Delete multiple rules at once"""
+        try:
+            deleted_count = 0
+            failed_count = 0
+
+            for rule_id in rule_ids:
+                if db.delete_rule(rule_id):
+                    deleted_count += 1
+                else:
+                    failed_count += 1
+
+            return {
+                "message": f"Deleted {deleted_count} rules successfully",
+                "deleted_count": deleted_count,
+                "failed_count": failed_count
+            }
+
+        except Exception as e:
+            logger.error(f"Error in bulk delete rules: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/api/monitors/bulk-delete", response_model=dict)
+    async def bulk_delete_monitors(
+        monitor_ids: List[int],
+        db: NotificationDatabase = Depends(get_database)
+    ):
+        """Delete multiple monitors and their associated rules at once"""
+        try:
+            deleted_monitors = 0
+            deleted_rules = 0
+            failed_count = 0
+
+            for monitor_id in monitor_ids:
+                try:
+                    # Get monitor
+                    monitor = db.get_monitor_by_id(monitor_id)
+                    if not monitor:
+                        failed_count += 1
+                        continue
+
+                    # Delete all rules associated with this monitor
+                    rules = db.get_rules(monitor_name=monitor.name, db_name=monitor.db_name, active_only=False)
+                    for rule in rules:
+                        if db.delete_rule(rule.id):
+                            deleted_rules += 1
+
+                    # Stop monitor if running
+                    if app_instance and hasattr(app_instance, 'monitor_manager'):
+                        await app_instance.monitor_manager.stop_monitor(monitor_id)
+
+                    # Delete monitor
+                    if db.delete_monitor(monitor_id):
+                        deleted_monitors += 1
+                    else:
+                        failed_count += 1
+
+                except Exception as e:
+                    logger.error(f"Error deleting monitor {monitor_id}: {e}")
+                    failed_count += 1
+
+            return {
+                "message": f"Deleted {deleted_monitors} monitors and {deleted_rules} rules successfully",
+                "deleted_monitors": deleted_monitors,
+                "deleted_rules": deleted_rules,
+                "failed_count": failed_count
+            }
+
+        except Exception as e:
+            logger.error(f"Error in bulk delete monitors: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
     
     @app.get("/api/condition-types")
     async def get_condition_types():
@@ -457,7 +849,58 @@ def create_app(rules_engine: NotificationRulesEngine = None, app_instance = None
         except Exception as e:
             logger.error(f"Error in test all rules: {e}")
             return {"success": False, "error": str(e)}
-    
+
+    @app.post("/api/rules/{rule_id}/test")
+    async def test_single_rule(rule_id: int, engine: NotificationRulesEngine = Depends(get_rules_engine)):
+        """Send test notification for a specific rule"""
+        try:
+            # Get rule
+            rule = None
+            for r in engine.database.get_rules(active_only=False):
+                if r.id == rule_id:
+                    rule = r
+                    break
+
+            if not rule:
+                raise HTTPException(status_code=404, detail="Rule not found")
+
+            # Get monitor state
+            monitor_key = f"{rule.db_name}.{rule.monitor_name}"
+            state = engine.monitor_states.get(monitor_key)
+
+            # Create test message
+            test_old = state.previous_value if state else "old_value"
+            test_new = state.current_value if state else "new_value"
+
+            message = f"🧪 TEST NOTIFICATION\n\n"
+            message += f"Rule: {rule.name}\n"
+            message += f"Monitor: {rule.monitor_name}\n"
+            message += f"Database: {rule.db_name}\n"
+            message += f"Priority: {rule.priority.value}\n\n"
+            message += f"Sample: {test_old} → {test_new}"
+
+            # Send test notification
+            if engine.notification_callback:
+                target_chats = None if rule.target_chats == "all" else [
+                    int(cid.strip()) for cid in rule.target_chats.split(",") if cid.strip()
+                ]
+
+                await engine.notification_callback(message, target_chats, rule.priority)
+
+                return {
+                    "success": True,
+                    "message": "Test notification sent",
+                    "rule": rule.name
+                }
+            else:
+                raise HTTPException(status_code=500, detail="Notification callback not configured")
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error testing rule: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
     return app
 
 

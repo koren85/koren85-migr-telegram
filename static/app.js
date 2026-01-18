@@ -8,9 +8,14 @@ createApp({
             rules: [],
             history: [],
             monitors: {},
+            monitorConfigs: [],
             conditionTypes: [],
             priorities: [],
             loading: false,
+
+            // Selection for bulk operations
+            selectedRules: [],
+            selectedMonitors: [],
 
             // Filters
             filters: {
@@ -49,6 +54,22 @@ createApp({
                 is_active: true
             },
 
+            // Monitor form
+            showMonitorForm: false,
+            editingMonitor: null,
+            monitorForm: {
+                name: '',
+                db_name: '',
+                sql_query: '',
+                check_interval: 60,
+                is_active: true,
+                driver: '',
+                url: '',
+                username: '',
+                password: '',
+                jar_path: ''
+            },
+
             // Test form
             testForm: {
                 old_value: '',
@@ -79,6 +100,7 @@ createApp({
                     this.loadRules(),
                     this.loadHistory(),
                     this.loadMonitors(),
+                    this.loadMonitorConfigs(),
                     this.loadConditionTypes(),
                     this.loadPriorities()
                 ]);
@@ -120,8 +142,15 @@ createApp({
         },
 
         async loadMonitors() {
-            const response = await axios.get('/api/monitors');
+            // Load runtime monitor states
+            const response = await axios.get('/api/monitor-states');
             this.monitors = response.data;
+        },
+
+        async loadMonitorConfigs() {
+            // Load monitor configurations from database
+            const response = await axios.get('/api/monitors');
+            this.monitorConfigs = response.data;
         },
 
         async loadConditionTypes() {
@@ -195,17 +224,6 @@ createApp({
             } catch (error) {
                 this.showError('Ошибка удаления правила: ' + error.response?.data?.detail || error.message);
             }
-        },
-
-        copyRule(rule) {
-            this.editingRule = null;
-            this.ruleForm = {
-                ...rule,
-                name: rule.name + ' (копия)',
-                id: undefined
-            };
-            this.showRuleForm = true;
-            this.showSuccess('Правило скопировано. Измените параметры и сохраните.');
         },
 
         async toggleRule(rule) {
@@ -368,38 +386,196 @@ createApp({
             }
         },
 
-        createRuleForMonitor(monitorName, dbName) {
-            this.editingRule = null;
-            this.resetRuleForm();
-            this.ruleForm.monitor_name = monitorName;
-            this.ruleForm.db_name = dbName;
-            this.ruleForm.name = `${monitorName} - Новое правило`;
-            this.showRuleForm = true;
+        // Monitor configuration CRUD
+        showCreateMonitor() {
+            this.editingMonitor = null;
+            this.resetMonitorForm();
+            this.showMonitorForm = true;
         },
 
-        copyMonitorRules(monitorName, dbName) {
-            // Найти все правила для этого монитора
-            const monitorRules = this.rules.filter(r =>
-                r.monitor_name === monitorName && r.db_name === dbName
-            );
+        editMonitor(monitor) {
+            this.editingMonitor = monitor;
+            this.monitorForm = { ...monitor };
+            this.showMonitorForm = true;
+        },
 
-            if (monitorRules.length === 0) {
-                this.showError('У этого монитора нет правил для копирования');
+        resetMonitorForm() {
+            this.monitorForm = {
+                name: '',
+                db_name: '',
+                sql_query: '',
+                check_interval: 60,
+                is_active: true,
+                driver: '',
+                url: '',
+                username: '',
+                password: '',
+                jar_path: ''
+            };
+        },
+
+        async saveMonitor() {
+            try {
+                if (this.editingMonitor) {
+                    await axios.put(`/api/monitors/${this.editingMonitor.id}`, this.monitorForm);
+                    this.showSuccess('Монитор успешно обновлен и перезагружен');
+                } else {
+                    await axios.post('/api/monitors', this.monitorForm);
+                    this.showSuccess('Монитор успешно создан и запущен');
+                }
+
+                this.showMonitorForm = false;
+                await this.loadMonitorConfigs();
+                await this.loadMonitors();
+            } catch (error) {
+                this.showError('Ошибка сохранения монитора: ' + error.response?.data?.detail || error.message);
+            }
+        },
+
+        async deleteMonitor(monitorId) {
+            if (!confirm('Вы уверены, что хотите удалить этот монитор и все связанные правила? Это действие нельзя отменить!')) {
                 return;
             }
 
-            // Копируем первое правило как шаблон
-            const rule = monitorRules[0];
-            this.editingRule = null;
-            this.ruleForm = {
-                ...rule,
-                name: rule.name + ' (копия)',
-                id: undefined,
-                monitor_name: monitorName,
-                db_name: dbName
-            };
-            this.showRuleForm = true;
-            this.showSuccess(`Скопировано правило "${rule.name}". Измените параметры и сохраните.`);
+            try {
+                const response = await axios.delete(`/api/monitors/${monitorId}`);
+                const rulesDeleted = response.data.deleted_rules || 0;
+                if (rulesDeleted > 0) {
+                    this.showSuccess(`✅ Монитор удален вместе с ${rulesDeleted} правилами`);
+                } else {
+                    this.showSuccess('✅ Монитор успешно удален');
+                }
+                await this.loadMonitorConfigs();
+                await this.loadMonitors();
+                await this.loadRules();
+            } catch (error) {
+                this.showError('❌ Ошибка удаления монитора: ' + error.response?.data?.detail || error.message);
+            }
+        },
+
+        async testMonitor(monitorId) {
+            try {
+                this.loading = true;
+                const response = await axios.post(`/api/monitors/${monitorId}/test`);
+                const result = response.data;
+
+                if (result.success) {
+                    this.showSuccess(`✅ Тест успешен для "${result.monitor_name}"\nРезультат: ${result.result}`);
+                } else {
+                    this.showError(`❌ Тест не прошел для "${result.monitor_name}"\nОшибка: ${result.error}`);
+                }
+            } catch (error) {
+                this.showError('❌ Ошибка выполнения теста: ' + (error.response?.data?.detail || error.message));
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        async toggleMonitor(monitor) {
+            try {
+                await axios.put(`/api/monitors/${monitor.id}`, {
+                    is_active: !monitor.is_active
+                });
+
+                monitor.is_active = !monitor.is_active;
+                this.showSuccess(`Монитор ${monitor.is_active ? 'включен и запущен' : 'отключен и остановлен'}`);
+                await this.loadMonitors();
+            } catch (error) {
+                this.showError('Ошибка изменения статуса монитора: ' + error.response?.data?.detail || error.message);
+            }
+        },
+
+        async testRuleForMonitor(ruleId) {
+            try {
+                const response = await axios.post(`/api/rules/${ruleId}/test`);
+                if (response.data.success) {
+                    this.showSuccess('✅ Тестовое уведомление отправлено');
+                }
+            } catch (error) {
+                this.showError('❌ Ошибка отправки тестового уведомления: ' + error.message);
+            }
+        },
+
+        async copyRule(rule) {
+            try {
+                const response = await axios.post(`/api/rules/${rule.id}/copy`);
+                this.showSuccess(`✅ Правило скопировано: ${rule.name} (копия)`);
+                await this.loadRules();
+                await this.loadStats();
+            } catch (error) {
+                this.showError('❌ Ошибка копирования правила: ' + (error.response?.data?.detail || error.message));
+            }
+        },
+
+        async copyMonitor(monitor) {
+            try {
+                const response = await axios.post(`/api/monitors/${monitor.id}/copy`);
+                this.showSuccess(`✅ Монитор скопирован: ${monitor.name} (копия)`);
+                await this.loadMonitorConfigs();
+                await this.loadMonitors();
+            } catch (error) {
+                this.showError('❌ Ошибка копирования монитора: ' + (error.response?.data?.detail || error.message));
+            }
+        },
+
+        // Bulk operations
+        toggleAllRules() {
+            if (this.selectedRules.length === this.filteredRules.length) {
+                this.selectedRules = [];
+            } else {
+                this.selectedRules = this.filteredRules.map(r => r.id);
+            }
+        },
+
+        toggleAllMonitors() {
+            if (this.selectedMonitors.length === this.monitorConfigs.length) {
+                this.selectedMonitors = [];
+            } else {
+                this.selectedMonitors = this.monitorConfigs.map(m => m.id);
+            }
+        },
+
+        async bulkDeleteRules() {
+            if (this.selectedRules.length === 0) {
+                this.showError('Выберите хотя бы одно правило для удаления');
+                return;
+            }
+
+            if (!confirm(`Вы уверены, что хотите удалить ${this.selectedRules.length} правил(а)?`)) {
+                return;
+            }
+
+            try {
+                const response = await axios.post('/api/rules/bulk-delete', this.selectedRules);
+                this.showSuccess(`✅ ${response.data.message}`);
+                this.selectedRules = [];
+                await this.loadRules();
+                await this.loadStats();
+            } catch (error) {
+                this.showError('❌ Ошибка массового удаления правил: ' + error.message);
+            }
+        },
+
+        async bulkDeleteMonitors() {
+            if (this.selectedMonitors.length === 0) {
+                this.showError('Выберите хотя бы один монитор для удаления');
+                return;
+            }
+
+            if (!confirm(`Вы уверены, что хотите удалить ${this.selectedMonitors.length} монитор(ов) и все связанные правила?`)) {
+                return;
+            }
+
+            try {
+                const response = await axios.post('/api/monitors/bulk-delete', this.selectedMonitors);
+                this.showSuccess(`✅ ${response.data.message}`);
+                this.selectedMonitors = [];
+                await this.loadMonitorConfigs();
+                await this.loadMonitors();
+                await this.loadRules();
+            } catch (error) {
+                this.showError('❌ Ошибка массового удаления мониторов: ' + error.message);
+            }
         },
 
         // Filter methods
@@ -487,24 +663,20 @@ createApp({
             return Array.from(monitorNames).sort();
         },
 
-        // Мониторы для выбранной БД в форме создания правила
-        filteredMonitorsForDb() {
-            const selectedDb = this.ruleForm.db_name;
-            if (!selectedDb) {
-                return this.uniqueMonitorNames;
-            }
-            const monitorsForDb = new Set();
-            Object.values(this.monitors).forEach(monitor => {
-                if (monitor.db_name === selectedDb) {
-                    monitorsForDb.add(monitor.monitor_name);
-                }
-            });
-            this.rules.forEach(rule => {
-                if (rule.db_name === selectedDb) {
-                    monitorsForDb.add(rule.monitor_name);
-                }
-            });
-            return Array.from(monitorsForDb).sort();
+        // Get database names from monitor configurations
+        monitorDbNames() {
+            const dbNames = new Set();
+            this.monitorConfigs.forEach(m => dbNames.add(m.db_name));
+            return Array.from(dbNames).sort();
+        },
+
+        // Get monitor names filtered by selected database
+        filteredMonitorNamesForDb() {
+            if (!this.ruleForm.db_name) return [];
+            return this.monitorConfigs
+                .filter(m => m.db_name === this.ruleForm.db_name)
+                .map(m => m.name)
+                .sort();
         }
     },
 
@@ -533,11 +705,15 @@ createApp({
                                 @click="activeTab = 'rules'">
                             <i class="fas fa-cogs"></i> Правила
                         </button>
-                        <button class="nav-link" :class="{active: activeTab === 'monitors'}" 
+                        <button class="nav-link" :class="{active: activeTab === 'monitors'}"
                                 @click="activeTab = 'monitors'">
-                            <i class="fas fa-eye"></i> Мониторы
+                            <i class="fas fa-eye"></i> Состояние
                         </button>
-                        <button class="nav-link" :class="{active: activeTab === 'history'}" 
+                        <button class="nav-link" :class="{active: activeTab === 'monitor-config'}"
+                                @click="activeTab = 'monitor-config'">
+                            <i class="fas fa-cog"></i> Мониторы
+                        </button>
+                        <button class="nav-link" :class="{active: activeTab === 'history'}"
                                 @click="activeTab = 'history'">
                             <i class="fas fa-history"></i> История
                         </button>
@@ -635,9 +811,14 @@ createApp({
                     <div v-if="activeTab === 'rules'">
                         <div class="d-flex justify-content-between align-items-center mb-3">
                             <h2>Правила уведомлений</h2>
-                            <button class="btn btn-primary" @click="showCreateRule">
-                                <i class="fas fa-plus"></i> Создать правило
-                            </button>
+                            <div>
+                                <button v-if="selectedRules.length > 0" class="btn btn-danger me-2" @click="bulkDeleteRules">
+                                    <i class="fas fa-trash"></i> Удалить выбранные ({{ selectedRules.length }})
+                                </button>
+                                <button class="btn btn-primary" @click="showCreateRule">
+                                    <i class="fas fa-plus"></i> Создать правило
+                                </button>
+                            </div>
                         </div>
                         
                         <!-- Rules Filters -->
@@ -703,6 +884,11 @@ createApp({
                                     <table class="table table-striped">
                                         <thead>
                                             <tr>
+                                                <th style="width: 40px;">
+                                                    <input type="checkbox" class="form-check-input"
+                                                           @change="toggleAllRules"
+                                                           :checked="selectedRules.length === filteredRules.length && filteredRules.length > 0">
+                                                </th>
                                                 <th>Название</th>
                                                 <th>Монитор</th>
                                                 <th>Условие</th>
@@ -714,6 +900,11 @@ createApp({
                                         </thead>
                                         <tbody>
                                             <tr v-for="rule in filteredRules" :key="rule.id">
+                                                <td>
+                                                    <input type="checkbox" class="form-check-input"
+                                                           v-model="selectedRules"
+                                                           :value="rule.id">
+                                                </td>
                                                 <td>{{ rule.name }}</td>
                                                 <td>{{ rule.db_name }}.{{ rule.monitor_name }}</td>
                                                 <td>{{ getConditionTypeLabel(rule.condition_type) }}</td>
@@ -730,20 +921,26 @@ createApp({
                                                 </td>
                                                 <td>
                                                     <div class="btn-group btn-group-sm">
-                                                        <button class="btn btn-outline-primary btn-sm" 
-                                                                @click="editRule(rule)" title="Редактировать">
+                                                        <button class="btn btn-outline-info btn-sm"
+                                                                @click="testRuleForMonitor(rule.id)"
+                                                                title="Отправить тестовое уведомление">
+                                                            <i class="fas fa-vial"></i>
+                                                        </button>
+                                                        <button class="btn btn-outline-primary btn-sm"
+                                                                @click="editRule(rule)">
                                                             <i class="fas fa-edit"></i>
                                                         </button>
-                                                        <button class="btn btn-outline-secondary btn-sm" 
-                                                                @click="copyRule(rule)" title="Копировать">
+                                                        <button class="btn btn-outline-secondary btn-sm"
+                                                                @click="copyRule(rule)"
+                                                                title="Копировать правило">
                                                             <i class="fas fa-copy"></i>
                                                         </button>
-                                                        <button class="btn btn-outline-warning btn-sm" 
-                                                                @click="toggleRule(rule)" title="Вкл/Выкл">
+                                                        <button class="btn btn-outline-warning btn-sm"
+                                                                @click="toggleRule(rule)">
                                                             <i :class="rule.is_active ? 'fas fa-pause' : 'fas fa-play'"></i>
                                                         </button>
-                                                        <button class="btn btn-outline-danger btn-sm" 
-                                                                @click="deleteRule(rule.id)" title="Удалить">
+                                                        <button class="btn btn-outline-danger btn-sm"
+                                                                @click="deleteRule(rule.id)">
                                                             <i class="fas fa-trash"></i>
                                                         </button>
                                                     </div>
@@ -756,9 +953,95 @@ createApp({
                         </div>
                     </div>
                     
-                    <!-- Monitors Tab -->
+                    <!-- Monitor Configuration Tab -->
+                    <div v-if="activeTab === 'monitor-config'">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h2>Управление мониторами</h2>
+                            <div>
+                                <button v-if="selectedMonitors.length > 0" class="btn btn-danger me-2" @click="bulkDeleteMonitors">
+                                    <i class="fas fa-trash"></i> Удалить выбранные ({{ selectedMonitors.length }})
+                                </button>
+                                <button class="btn btn-primary" @click="showCreateMonitor">
+                                    <i class="fas fa-plus"></i> Создать монитор
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="card">
+                            <div class="card-body">
+                                <div v-if="monitorConfigs.length === 0" class="text-muted text-center py-4">
+                                    Мониторы не настроены. Создайте первый монитор для начала работы!
+                                </div>
+                                <div v-else class="table-responsive">
+                                    <table class="table table-striped">
+                                        <thead>
+                                            <tr>
+                                                <th style="width: 40px;">
+                                                    <input type="checkbox" class="form-check-input"
+                                                           @change="toggleAllMonitors"
+                                                           :checked="selectedMonitors.length === monitorConfigs.length && monitorConfigs.length > 0">
+                                                </th>
+                                                <th>Название</th>
+                                                <th>База данных</th>
+                                                <th>SQL запрос</th>
+                                                <th>Интервал</th>
+                                                <th>Статус</th>
+                                                <th>Действия</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr v-for="monitor in monitorConfigs" :key="monitor.id">
+                                                <td>
+                                                    <input type="checkbox" class="form-check-input"
+                                                           v-model="selectedMonitors"
+                                                           :value="monitor.id">
+                                                </td>
+                                                <td><strong>{{ monitor.name }}</strong></td>
+                                                <td>{{ monitor.db_name }}</td>
+                                                <td><code class="small">{{ monitor.sql_query.substring(0, 50) }}...</code></td>
+                                                <td>{{ monitor.check_interval }}s</td>
+                                                <td>
+                                                    <span class="badge" :class="monitor.is_active ? 'bg-success' : 'bg-secondary'">
+                                                        {{ monitor.is_active ? 'Активен' : 'Остановлен' }}
+                                                    </span>
+                                                </td>
+                                                <td>
+                                                    <div class="btn-group btn-group-sm">
+                                                        <button class="btn btn-outline-primary btn-sm"
+                                                                @click="editMonitor(monitor)">
+                                                            <i class="fas fa-edit"></i>
+                                                        </button>
+                                                        <button class="btn btn-outline-secondary btn-sm"
+                                                                @click="copyMonitor(monitor)"
+                                                                title="Копировать монитор">
+                                                            <i class="fas fa-copy"></i>
+                                                        </button>
+                                                        <button class="btn btn-outline-info btn-sm"
+                                                                @click="testMonitor(monitor.id)"
+                                                                title="Проверить работу монитора">
+                                                            <i class="fas fa-vial"></i>
+                                                        </button>
+                                                        <button class="btn btn-outline-warning btn-sm"
+                                                                @click="toggleMonitor(monitor)">
+                                                            <i :class="monitor.is_active ? 'fas fa-pause' : 'fas fa-play'"></i>
+                                                        </button>
+                                                        <button class="btn btn-outline-danger btn-sm"
+                                                                @click="deleteMonitor(monitor.id)">
+                                                            <i class="fas fa-trash"></i>
+                                                        </button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Monitors State Tab -->
                     <div v-if="activeTab === 'monitors'">
-                        <h2>Состояние мониторов</h2>
+                        <h2>Состояние мониторов (Runtime)</h2>
                         
                         <!-- Monitors Filters -->
                         <div class="card mb-3">
@@ -856,16 +1139,6 @@ createApp({
                                                             @click="disableMonitor(monitor.monitor_name, monitor.db_name)"
                                                             :disabled="loading">
                                                         <i class="fas fa-ban"></i> Отключить
-                                                    </button>
-                                                    <button class="btn btn-primary btn-sm me-1"
-                                                            @click="createRuleForMonitor(monitor.monitor_name, monitor.db_name)"
-                                                            title="Создать правило">
-                                                        <i class="fas fa-plus"></i>
-                                                    </button>
-                                                    <button class="btn btn-secondary btn-sm"
-                                                            @click="copyMonitorRules(monitor.monitor_name, monitor.db_name)"
-                                                            title="Копировать правила">
-                                                        <i class="fas fa-copy"></i>
                                                     </button>
                                                 </td>
                                             </tr>
@@ -989,23 +1262,28 @@ createApp({
                                     <div class="col-md-3">
                                         <div class="mb-3">
                                             <label class="form-label">База данных</label>
-                                            <input type="text" class="form-control" v-model="ruleForm.db_name" 
-                                                   list="dbNamesList" placeholder="Выберите или введите...">
-                                            <datalist id="dbNamesList">
-                                                <option value="">Все базы (пусто)</option>
-                                                <option v-for="dbName in uniqueDbNames" :key="dbName" :value="dbName">{{ dbName }}</option>
-                                            </datalist>
-                                            <small class="form-text text-muted">Пусто = для всех БД</small>
+                                            <select class="form-select" v-model="ruleForm.db_name" required
+                                                    @change="ruleForm.monitor_name = ''">
+                                                <option value="" disabled>Выберите базу данных</option>
+                                                <option v-for="dbName in monitorDbNames" :key="dbName" :value="dbName">
+                                                    {{ dbName }}
+                                                </option>
+                                            </select>
                                         </div>
                                     </div>
                                     <div class="col-md-3">
                                         <div class="mb-3">
                                             <label class="form-label">Монитор</label>
-                                            <input type="text" class="form-control" v-model="ruleForm.monitor_name" 
-                                                   list="monitorNamesList" placeholder="Выберите или введите..." required>
-                                            <datalist id="monitorNamesList">
-                                                <option v-for="monitorName in filteredMonitorsForDb" :key="monitorName" :value="monitorName">{{ monitorName }}</option>
-                                            </datalist>
+                                            <select class="form-select" v-model="ruleForm.monitor_name" required
+                                                    :disabled="!ruleForm.db_name">
+                                                <option value="" disabled>Выберите монитор</option>
+                                                <option v-for="monitorName in filteredMonitorNamesForDb" :key="monitorName" :value="monitorName">
+                                                    {{ monitorName }}
+                                                </option>
+                                            </select>
+                                            <div v-if="!ruleForm.db_name" class="form-text text-muted">
+                                                Сначала выберите базу данных
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
@@ -1117,8 +1395,121 @@ createApp({
                 </div>
             </div>
             
+            <!-- Monitor Form Modal -->
+            <div class="modal" :class="{show: showMonitorForm}" style="display: block;" v-if="showMonitorForm">
+                <div class="modal-dialog modal-lg">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">
+                                {{ editingMonitor ? 'Редактировать монитор' : 'Создать новый монитор' }}
+                            </h5>
+                            <button type="button" class="btn-close" @click="showMonitorForm = false"></button>
+                        </div>
+                        <div class="modal-body">
+                            <form @submit.prevent="saveMonitor">
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <div class="mb-3">
+                                            <label class="form-label">Название монитора</label>
+                                            <input type="text" class="form-control" v-model="monitorForm.name" required
+                                                   placeholder="например: Воронеж 1 задача">
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="mb-3">
+                                            <label class="form-label">База данных</label>
+                                            <input type="text" class="form-control" v-model="monitorForm.db_name" required
+                                                   placeholder="например: voron_migr_db">
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="mb-3">
+                                    <label class="form-label">SQL запрос</label>
+                                    <textarea class="form-control" v-model="monitorForm.sql_query" rows="3" required
+                                              placeholder="SELECT column FROM table WHERE ..."></textarea>
+                                    <div class="form-text">
+                                        Запрос должен возвращать одно значение для мониторинга
+                                    </div>
+                                </div>
+
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <div class="mb-3">
+                                            <label class="form-label">Интервал проверки (секунды)</label>
+                                            <input type="number" class="form-control" v-model="monitorForm.check_interval" required>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="mb-3">
+                                            <label class="form-label">Статус</label>
+                                            <div class="form-check mt-2">
+                                                <input class="form-check-input" type="checkbox" v-model="monitorForm.is_active">
+                                                <label class="form-check-label">Активен (запущен)</label>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Optional database connection fields -->
+                                <div class="border-top pt-3 mt-3">
+                                    <h6 class="text-muted">Настройки подключения (опционально)</h6>
+                                    <p class="small text-muted">Оставьте пустым чтобы использовать настройки из config.yaml</p>
+
+                                    <div class="row">
+                                        <div class="col-md-6">
+                                            <div class="mb-3">
+                                                <label class="form-label">JDBC Driver</label>
+                                                <input type="text" class="form-control" v-model="monitorForm.driver"
+                                                       placeholder="org.postgresql.Driver">
+                                            </div>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <div class="mb-3">
+                                                <label class="form-label">JAR Path</label>
+                                                <input type="text" class="form-control" v-model="monitorForm.jar_path"
+                                                       placeholder="/path/to/driver.jar">
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div class="mb-3">
+                                        <label class="form-label">JDBC URL</label>
+                                        <input type="text" class="form-control" v-model="monitorForm.url"
+                                               placeholder="jdbc:postgresql://localhost:5432/database">
+                                    </div>
+
+                                    <div class="row">
+                                        <div class="col-md-6">
+                                            <div class="mb-3">
+                                                <label class="form-label">Username</label>
+                                                <input type="text" class="form-control" v-model="monitorForm.username"
+                                                       placeholder="db_user">
+                                            </div>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <div class="mb-3">
+                                                <label class="form-label">Password</label>
+                                                <input type="password" class="form-control" v-model="monitorForm.password"
+                                                       placeholder="••••••••">
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </form>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" @click="showMonitorForm = false">Отмена</button>
+                            <button type="button" class="btn btn-primary" @click="saveMonitor">
+                                {{ editingMonitor ? 'Обновить и перезагрузить' : 'Создать и запустить' }} монитор
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Loading Overlay -->
-            <div v-if="loading" class="position-fixed top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center" 
+            <div v-if="loading" class="position-fixed top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center"
                  style="background-color: rgba(0,0,0,0.5); z-index: 9999;">
                 <div class="spinner-border text-light" role="status">
                     <span class="visually-hidden">Загрузка...</span>

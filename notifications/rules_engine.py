@@ -24,64 +24,90 @@ class NotificationRulesEngine:
         """Generate unique key for monitor"""
         return f"{db_name}.{monitor_name}"
     
-    async def process_value_change(self, db_name: str, monitor_name: str, 
+    async def process_value_change(self, db_name: str, monitor_name: str,
                                  old_value: Any, new_value: Any):
         """Process value change and check notification rules"""
         monitor_key = self.get_monitor_key(db_name, monitor_name)
-        
+
+        logger.debug(f"Processing value change for {monitor_key}: {old_value} -> {new_value}")
+
         # Get or create monitor state
         if monitor_key not in self.monitor_states:
             self.monitor_states[monitor_key] = MonitorState(
                 monitor_name=monitor_name,
                 db_name=db_name
             )
-        
+            logger.debug(f"Created new monitor state for {monitor_key}")
+
         state = self.monitor_states[monitor_key]
         now = datetime.now()
-        
+
         # Update monitor state
         state.previous_value = state.current_value
         state.current_value = new_value
-        
+
         # Check if value actually changed
         value_changed = old_value != new_value
         if value_changed:
             state.last_change_time = now
             state.same_value_duration = 0
+            logger.info(f"Value CHANGED for {monitor_key}: {old_value} -> {new_value}")
         else:
             # Calculate how long the value has been the same
             if state.last_change_time:
                 state.same_value_duration = int((now - state.last_change_time).total_seconds())
-        
+            logger.debug(f"Value UNCHANGED for {monitor_key}: {new_value} (duration: {state.same_value_duration}s)")
+
         # Get rules for this monitor
-        rules = self.database.get_rules(monitor_name=monitor_name, db_name=db_name)
-        
+        rules = self.database.get_rules(monitor_name=monitor_name, db_name=db_name, active_only=True)
+        logger.debug(f"Found {len(rules)} active rules for {monitor_key}")
+
         # Process each rule
         for rule in rules:
+            logger.debug(f"Checking rule '{rule.name}' (type: {rule.condition_type.value}, cooldown: {rule.cooldown_seconds}s)")
             if await self._should_trigger_notification(rule, state, old_value, new_value):
                 await self._send_notification(rule, state, old_value, new_value)
     
-    async def _should_trigger_notification(self, rule: NotificationRule, 
-                                         state: MonitorState, old_value: Any, 
+    async def _should_trigger_notification(self, rule: NotificationRule,
+                                         state: MonitorState, old_value: Any,
                                          new_value: Any) -> bool:
         """Check if notification should be triggered based on rule conditions"""
-        
+
         # Check cooldown
         if await self._is_in_cooldown(rule, state):
+            logger.debug(f"Rule '{rule.name}' is in cooldown, skipping notification")
             return False
-        
+
         # Check condition
-        return await self._evaluate_condition(rule, state, old_value, new_value)
+        condition_result = await self._evaluate_condition(rule, state, old_value, new_value)
+        if condition_result:
+            logger.debug(f"Rule '{rule.name}' condition met: {old_value} -> {new_value}")
+        else:
+            logger.debug(f"Rule '{rule.name}' condition NOT met: {old_value} -> {new_value}")
+
+        return condition_result
     
     async def _is_in_cooldown(self, rule: NotificationRule, state: MonitorState) -> bool:
         """Check if rule is in cooldown period"""
-        if not rule.id or rule.id not in state.notification_cooldowns:
+        # No cooldown if cooldown_seconds is 0
+        if rule.cooldown_seconds == 0:
             return False
-        
+
+        if not rule.id or rule.id not in state.notification_cooldowns:
+            logger.debug(f"Rule '{rule.name}' (ID: {rule.id}) has no cooldown record, allowing notification")
+            return False
+
         last_sent = state.notification_cooldowns[rule.id]
         cooldown_until = last_sent + timedelta(seconds=rule.cooldown_seconds)
-        
-        return datetime.now() < cooldown_until
+        now = datetime.now()
+
+        if now < cooldown_until:
+            remaining = (cooldown_until - now).total_seconds()
+            logger.debug(f"Rule '{rule.name}' is in cooldown, {remaining:.1f}s remaining")
+            return True
+        else:
+            logger.debug(f"Rule '{rule.name}' cooldown expired, allowing notification")
+            return False
     
     async def _evaluate_condition(self, rule: NotificationRule, state: MonitorState,
                                 old_value: Any, new_value: Any) -> bool:
@@ -267,19 +293,19 @@ class NotificationRulesEngine:
     
     def create_default_rules(self, monitor_name: str, db_name: str):
         """Create default notification rules for a new monitor"""
-        
-        # Rule 1: Notify on any change
+
+        # Rule 1: Notify on ANY change - NO cooldown for 100% reliability
         change_rule = NotificationRule(
             name=f"{monitor_name} - Value Changed",
             monitor_name=monitor_name,
             db_name=db_name,
             condition_type=ConditionType.VALUE_CHANGED,
-            cooldown_seconds=60,  # 1 minute
+            cooldown_seconds=0,  # NO cooldown - guarantee ALL notifications
             priority=NotificationPriority.MEDIUM,
             message_template="🔄 {monitor_name}: {old_value} → {new_value}",
             target_chats="all"
         )
-        
+
         # Rule 2: Alert if stuck for 1 hour
         stuck_rule = NotificationRule(
             name=f"{monitor_name} - Value Stuck",
@@ -292,12 +318,12 @@ class NotificationRulesEngine:
             message_template="⚠️ {monitor_name} не изменяется уже {same_value_duration}",
             target_chats="all"
         )
-        
+
         # Create rules in database
         self.database.create_rule(change_rule)
         self.database.create_rule(stuck_rule)
-        
-        logger.info(f"Created default notification rules for {db_name}.{monitor_name}")
+
+        logger.info(f"Created default notification rules for {db_name}.{monitor_name} (cooldown: {change_rule.cooldown_seconds}s)")
     
     def get_monitor_states(self) -> Dict[str, MonitorState]:
         """Get all monitor states"""
