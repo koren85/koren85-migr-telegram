@@ -667,16 +667,28 @@ createApp({
         monitorDbNames() {
             const dbNames = new Set();
             this.monitorConfigs.forEach(m => dbNames.add(m.db_name));
+
+            // If editing a rule, ensure the current db_name is included
+            if (this.editingRule && this.ruleForm.db_name) {
+                dbNames.add(this.ruleForm.db_name);
+            }
+
             return Array.from(dbNames).sort();
         },
 
         // Get monitor names filtered by selected database
         filteredMonitorNamesForDb() {
             if (!this.ruleForm.db_name) return [];
-            return this.monitorConfigs
+            const monitors = this.monitorConfigs
                 .filter(m => m.db_name === this.ruleForm.db_name)
-                .map(m => m.name)
-                .sort();
+                .map(m => m.name);
+
+            // If editing a rule, ensure the current monitor_name is included
+            if (this.editingRule && this.ruleForm.monitor_name && !monitors.includes(this.ruleForm.monitor_name)) {
+                monitors.push(this.ruleForm.monitor_name);
+            }
+
+            return monitors.sort();
         }
     },
 

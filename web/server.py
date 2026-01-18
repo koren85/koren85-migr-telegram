@@ -187,6 +187,8 @@ def create_app(rules_engine: NotificationRulesEngine = None, app_instance = None
         db: NotificationDatabase = Depends(get_database)
     ):
         """Update notification rule"""
+        logger.info(f"Updating rule {rule_id}: received data = {rule_data.model_dump(exclude_unset=True)}")
+        
         # Get existing rule
         existing_rules = db.get_rules(active_only=False)
         existing_rule = next((r for r in existing_rules if r.id == rule_id), None)
@@ -194,9 +196,13 @@ def create_app(rules_engine: NotificationRulesEngine = None, app_instance = None
         if not existing_rule:
             raise HTTPException(status_code=404, detail="Rule not found")
         
+        logger.info(f"Before update: monitor_name={existing_rule.monitor_name}, db_name={existing_rule.db_name}")
+        
         # Update fields
         for field, value in rule_data.model_dump(exclude_unset=True).items():
             setattr(existing_rule, field, value)
+        
+        logger.info(f"After update: monitor_name={existing_rule.monitor_name}, db_name={existing_rule.db_name}")
         
         success = db.update_rule(existing_rule)
         if not success:
@@ -872,16 +878,27 @@ def create_app(rules_engine: NotificationRulesEngine = None, app_instance = None
             monitor_key = f"{rule.db_name}.{rule.monitor_name}"
             state = engine.monitor_states.get(monitor_key)
 
-            # Create test message
+            # Get real or test values
             test_old = state.previous_value if state else "old_value"
             test_new = state.current_value if state else "new_value"
 
-            message = f"🧪 TEST NOTIFICATION\n\n"
-            message += f"Rule: {rule.name}\n"
-            message += f"Monitor: {rule.monitor_name}\n"
-            message += f"Database: {rule.db_name}\n"
-            message += f"Priority: {rule.priority.value}\n\n"
-            message += f"Sample: {test_old} → {test_new}"
+            # Create a temporary state if needed for message formatting
+            if not state:
+                from notifications.models import MonitorState
+                state = MonitorState(
+                    monitor_name=rule.monitor_name,
+                    db_name=rule.db_name,
+                    current_value=test_new,
+                    same_value_duration=0
+                )
+
+            # Format message using the rule's template
+            formatted_message = await engine._format_message(
+                rule.message_template, rule, state, test_old, test_new
+            )
+
+            # Add test prefix
+            message = f"🧪 TEST: {formatted_message}"
 
             # Send test notification
             if engine.notification_callback:
@@ -894,7 +911,9 @@ def create_app(rules_engine: NotificationRulesEngine = None, app_instance = None
                 return {
                     "success": True,
                     "message": "Test notification sent",
-                    "rule": rule.name
+                    "rule": rule.name,
+                    "old_value": str(test_old),
+                    "new_value": str(test_new)
                 }
             else:
                 raise HTTPException(status_code=500, detail="Notification callback not configured")
