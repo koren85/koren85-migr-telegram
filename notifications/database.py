@@ -111,7 +111,8 @@ class NotificationDatabase:
             params.append(monitor_name)
         
         if db_name:
-            query += " AND db_name = ?"
+            # Match exact db_name OR rules with empty db_name (applies to all DBs)
+            query += " AND (db_name = ? OR db_name = '' OR db_name IS NULL)"
             params.append(db_name)
             
         if active_only:

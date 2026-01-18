@@ -29,6 +29,8 @@ class RuleCreate(BaseModel):
 
 class RuleUpdate(BaseModel):
     name: Optional[str] = None
+    monitor_name: Optional[str] = None
+    db_name: Optional[str] = None
     condition_type: Optional[ConditionType] = None
     condition_value: Optional[str] = None
     condition_duration: Optional[int] = None

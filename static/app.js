@@ -197,6 +197,17 @@ createApp({
             }
         },
         
+        copyRule(rule) {
+            this.editingRule = null;
+            this.ruleForm = { 
+                ...rule,
+                name: rule.name + ' (копия)',
+                id: undefined
+            };
+            this.showRuleForm = true;
+            this.showSuccess('Правило скопировано. Измените параметры и сохраните.');
+        },
+        
         async toggleRule(rule) {
             try {
                 await axios.put(`/api/rules/${rule.id}`, {
@@ -440,6 +451,26 @@ createApp({
             this.rules.forEach(rule => monitorNames.add(rule.monitor_name));
             Object.values(this.monitors).forEach(monitor => monitorNames.add(monitor.monitor_name));
             return Array.from(monitorNames).sort();
+        },
+        
+        // Мониторы для выбранной БД в форме создания правила
+        filteredMonitorsForDb() {
+            const selectedDb = this.ruleForm.db_name;
+            if (!selectedDb) {
+                return this.uniqueMonitorNames;
+            }
+            const monitorsForDb = new Set();
+            Object.values(this.monitors).forEach(monitor => {
+                if (monitor.db_name === selectedDb) {
+                    monitorsForDb.add(monitor.monitor_name);
+                }
+            });
+            this.rules.forEach(rule => {
+                if (rule.db_name === selectedDb) {
+                    monitorsForDb.add(rule.monitor_name);
+                }
+            });
+            return Array.from(monitorsForDb).sort();
         }
     },
     
@@ -666,15 +697,19 @@ createApp({
                                                 <td>
                                                     <div class="btn-group btn-group-sm">
                                                         <button class="btn btn-outline-primary btn-sm" 
-                                                                @click="editRule(rule)">
+                                                                @click="editRule(rule)" title="Редактировать">
                                                             <i class="fas fa-edit"></i>
                                                         </button>
+                                                        <button class="btn btn-outline-secondary btn-sm" 
+                                                                @click="copyRule(rule)" title="Копировать">
+                                                            <i class="fas fa-copy"></i>
+                                                        </button>
                                                         <button class="btn btn-outline-warning btn-sm" 
-                                                                @click="toggleRule(rule)">
+                                                                @click="toggleRule(rule)" title="Вкл/Выкл">
                                                             <i :class="rule.is_active ? 'fas fa-pause' : 'fas fa-play'"></i>
                                                         </button>
                                                         <button class="btn btn-outline-danger btn-sm" 
-                                                                @click="deleteRule(rule.id)">
+                                                                @click="deleteRule(rule.id)" title="Удалить">
                                                             <i class="fas fa-trash"></i>
                                                         </button>
                                                     </div>
@@ -910,13 +945,23 @@ createApp({
                                     <div class="col-md-3">
                                         <div class="mb-3">
                                             <label class="form-label">База данных</label>
-                                            <input type="text" class="form-control" v-model="ruleForm.db_name" required>
+                                            <input type="text" class="form-control" v-model="ruleForm.db_name" 
+                                                   list="dbNamesList" placeholder="Выберите или введите...">
+                                            <datalist id="dbNamesList">
+                                                <option value="">Все базы (пусто)</option>
+                                                <option v-for="dbName in uniqueDbNames" :key="dbName" :value="dbName">{{ dbName }}</option>
+                                            </datalist>
+                                            <small class="form-text text-muted">Пусто = для всех БД</small>
                                         </div>
                                     </div>
                                     <div class="col-md-3">
                                         <div class="mb-3">
                                             <label class="form-label">Монитор</label>
-                                            <input type="text" class="form-control" v-model="ruleForm.monitor_name" required>
+                                            <input type="text" class="form-control" v-model="ruleForm.monitor_name" 
+                                                   list="monitorNamesList" placeholder="Выберите или введите..." required>
+                                            <datalist id="monitorNamesList">
+                                                <option v-for="monitorName in filteredMonitorsForDb" :key="monitorName" :value="monitorName">{{ monitorName }}</option>
+                                            </datalist>
                                         </div>
                                     </div>
                                 </div>
