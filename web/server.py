@@ -29,6 +29,8 @@ class RuleCreate(BaseModel):
 
 class RuleUpdate(BaseModel):
     name: Optional[str] = None
+    monitor_name: Optional[str] = None
+    db_name: Optional[str] = None
     condition_type: Optional[ConditionType] = None
     condition_value: Optional[str] = None
     condition_duration: Optional[int] = None
@@ -160,6 +162,7 @@ def create_app(rules_engine: NotificationRulesEngine = None, app_instance = None
         db: NotificationDatabase = Depends(get_database)
     ):
         """Create new notification rule"""
+        logger.info(f"Creating rule: name={rule_data.name}, monitor_name={rule_data.monitor_name}, db_name={rule_data.db_name}")
         rule = NotificationRule(
             name=rule_data.name,
             monitor_name=rule_data.monitor_name,
