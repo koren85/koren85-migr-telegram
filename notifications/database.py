@@ -11,7 +11,7 @@ from .models import NotificationRule, NotificationHistory, ConditionType, Notifi
 class NotificationDatabase:
     """SQLite database for notification rules and history"""
     
-    def __init__(self, db_path: str = "notifications.db"):
+    def __init__(self, db_path: str = "data/notifications.db"):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(exist_ok=True)
         self._init_database()

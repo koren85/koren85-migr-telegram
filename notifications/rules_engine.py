@@ -11,7 +11,7 @@ from .database import NotificationDatabase
 class NotificationRulesEngine:
     """Engine for processing notification rules and conditions"""
     
-    def __init__(self, db_path: str = "notifications.db"):
+    def __init__(self, db_path: str = "data/notifications.db"):
         self.database = NotificationDatabase(db_path)
         self.monitor_states: Dict[str, MonitorState] = {}
         self.notification_callback: Optional[Callable] = None
