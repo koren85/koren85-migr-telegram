@@ -11,7 +11,7 @@ createApp({
             conditionTypes: [],
             priorities: [],
             loading: false,
-            
+
             // Filters
             filters: {
                 rules: {
@@ -31,7 +31,7 @@ createApp({
                     db_name: ''
                 }
             },
-            
+
             // Rule form
             showRuleForm: false,
             editingRule: null,
@@ -48,7 +48,7 @@ createApp({
                 target_chats: 'all',
                 is_active: true
             },
-            
+
             // Test form
             testForm: {
                 old_value: '',
@@ -57,10 +57,10 @@ createApp({
             testResult: null
         }
     },
-    
+
     async mounted() {
         await this.loadData();
-        
+
         // Auto-refresh every 30 seconds
         setInterval(() => {
             if (this.activeTab === 'dashboard') {
@@ -69,7 +69,7 @@ createApp({
             }
         }, 30000);
     },
-    
+
     methods: {
         async loadData() {
             this.loading = true;
@@ -88,12 +88,12 @@ createApp({
                 this.loading = false;
             }
         },
-        
+
         async loadStats() {
             const response = await axios.get('/api/stats');
             this.stats = response.data;
         },
-        
+
         async loadRules() {
             const params = new URLSearchParams();
             params.append('active_only', this.filters.rules.active_only);
@@ -103,50 +103,50 @@ createApp({
             if (this.filters.rules.monitor_name) {
                 params.append('monitor_name', this.filters.rules.monitor_name);
             }
-            
+
             const response = await axios.get(`/api/rules?${params.toString()}`);
             this.rules = response.data;
         },
-        
+
         async loadHistory() {
             const params = new URLSearchParams();
             params.append('limit', '50');
             if (this.filters.history.monitor_name) {
                 params.append('monitor_name', this.filters.history.monitor_name);
             }
-            
+
             const response = await axios.get(`/api/history?${params.toString()}`);
             this.history = response.data;
         },
-        
+
         async loadMonitors() {
             const response = await axios.get('/api/monitors');
             this.monitors = response.data;
         },
-        
+
         async loadConditionTypes() {
             const response = await axios.get('/api/condition-types');
             this.conditionTypes = response.data;
         },
-        
+
         async loadPriorities() {
             const response = await axios.get('/api/priorities');
             this.priorities = response.data;
         },
-        
+
         // Rule management
         showCreateRule() {
             this.editingRule = null;
             this.resetRuleForm();
             this.showRuleForm = true;
         },
-        
+
         editRule(rule) {
             this.editingRule = rule;
             this.ruleForm = { ...rule };
             this.showRuleForm = true;
         },
-        
+
         resetRuleForm() {
             this.ruleForm = {
                 name: '',
@@ -163,7 +163,7 @@ createApp({
             };
             this.testResult = null;
         },
-        
+
         async saveRule() {
             try {
                 if (this.editingRule) {
@@ -173,7 +173,7 @@ createApp({
                     await axios.post('/api/rules', this.ruleForm);
                     this.showSuccess('Правило успешно создано');
                 }
-                
+
                 this.showRuleForm = false;
                 await this.loadRules();
                 await this.loadStats();
@@ -181,12 +181,12 @@ createApp({
                 this.showError('Ошибка сохранения правила: ' + error.response?.data?.detail || error.message);
             }
         },
-        
+
         async deleteRule(ruleId) {
             if (!confirm('Вы уверены, что хотите удалить это правило?')) {
                 return;
             }
-            
+
             try {
                 await axios.delete(`/api/rules/${ruleId}`);
                 this.showSuccess('Правило успешно удалено');
@@ -196,10 +196,10 @@ createApp({
                 this.showError('Ошибка удаления правила: ' + error.response?.data?.detail || error.message);
             }
         },
-        
+
         copyRule(rule) {
             this.editingRule = null;
-            this.ruleForm = { 
+            this.ruleForm = {
                 ...rule,
                 name: rule.name + ' (копия)',
                 id: undefined
@@ -207,20 +207,20 @@ createApp({
             this.showRuleForm = true;
             this.showSuccess('Правило скопировано. Измените параметры и сохраните.');
         },
-        
+
         async toggleRule(rule) {
             try {
                 await axios.put(`/api/rules/${rule.id}`, {
                     is_active: !rule.is_active
                 });
-                
+
                 rule.is_active = !rule.is_active;
                 this.showSuccess(`Правило ${rule.is_active ? 'включено' : 'отключено'}`);
             } catch (error) {
                 this.showError('Ошибка изменения статуса правила: ' + error.response?.data?.detail || error.message);
             }
         },
-        
+
         async testRule() {
             try {
                 const response = await axios.post('/api/test-rule', {
@@ -228,19 +228,19 @@ createApp({
                     test_old_value: this.testForm.old_value,
                     test_new_value: this.testForm.new_value
                 });
-                
+
                 this.testResult = response.data;
             } catch (error) {
                 this.showError('Ошибка тестирования правила: ' + error.response?.data?.detail || error.message);
             }
         },
-        
+
         // Utility methods
         formatDate(dateString) {
             if (!dateString) return 'Никогда';
             return new Date(dateString).toLocaleString();
         },
-        
+
         formatDuration(seconds) {
             if (seconds < 60) return `${seconds}s`;
             if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
@@ -248,7 +248,7 @@ createApp({
             const minutes = Math.floor((seconds % 3600) / 60);
             return `${hours}h ${minutes}m`;
         },
-        
+
         getPriorityBadgeClass(priority) {
             const classes = {
                 low: 'bg-secondary',
@@ -258,12 +258,12 @@ createApp({
             };
             return classes[priority] || 'bg-secondary';
         },
-        
+
         getConditionTypeLabel(type) {
             const condition = this.conditionTypes.find(ct => ct.value === type);
             return condition ? condition.label : type;
         },
-        
+
         showSuccess(message) {
             // Simple success notification
             const alert = document.createElement('div');
@@ -274,14 +274,14 @@ createApp({
                 <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
             `;
             document.body.appendChild(alert);
-            
+
             setTimeout(() => {
                 if (alert.parentNode) {
                     alert.parentNode.removeChild(alert);
                 }
             }, 5000);
         },
-        
+
         showError(message) {
             // Simple error notification
             const alert = document.createElement('div');
@@ -292,14 +292,14 @@ createApp({
                 <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
             `;
             document.body.appendChild(alert);
-            
+
             setTimeout(() => {
                 if (alert.parentNode) {
                     alert.parentNode.removeChild(alert);
                 }
             }, 8000);
         },
-        
+
         async forceTestNotification() {
             this.loading = true;
             try {
@@ -315,7 +315,7 @@ createApp({
                 this.loading = false;
             }
         },
-        
+
         async testAllRules() {
             this.loading = true;
             try {
@@ -334,13 +334,13 @@ createApp({
                 this.loading = false;
             }
         },
-        
+
         // Monitor management methods
         async disableMonitor(monitorName, dbName) {
             if (!confirm('Вы уверены, что хотите отключить все уведомления для этого монитора?')) {
                 return;
             }
-            
+
             this.loading = true;
             try {
                 await axios.delete(`/api/monitors/${encodeURIComponent(monitorName)}/disable?db_name=${encodeURIComponent(dbName)}`);
@@ -353,7 +353,7 @@ createApp({
                 this.loading = false;
             }
         },
-        
+
         async enableMonitor(monitorName, dbName) {
             this.loading = true;
             try {
@@ -367,13 +367,47 @@ createApp({
                 this.loading = false;
             }
         },
-        
+
+        createRuleForMonitor(monitorName, dbName) {
+            this.editingRule = null;
+            this.resetRuleForm();
+            this.ruleForm.monitor_name = monitorName;
+            this.ruleForm.db_name = dbName;
+            this.ruleForm.name = `${monitorName} - Новое правило`;
+            this.showRuleForm = true;
+        },
+
+        copyMonitorRules(monitorName, dbName) {
+            // Найти все правила для этого монитора
+            const monitorRules = this.rules.filter(r =>
+                r.monitor_name === monitorName && r.db_name === dbName
+            );
+
+            if (monitorRules.length === 0) {
+                this.showError('У этого монитора нет правил для копирования');
+                return;
+            }
+
+            // Копируем первое правило как шаблон
+            const rule = monitorRules[0];
+            this.editingRule = null;
+            this.ruleForm = {
+                ...rule,
+                name: rule.name + ' (копия)',
+                id: undefined,
+                monitor_name: monitorName,
+                db_name: dbName
+            };
+            this.showRuleForm = true;
+            this.showSuccess(`Скопировано правило "${rule.name}". Измените параметры и сохраните.`);
+        },
+
         // Filter methods
         applyFilters() {
             this.loadRules();
             this.loadHistory();
         },
-        
+
         clearFilters() {
             this.filters.rules = {
                 search: '',
@@ -394,50 +428,50 @@ createApp({
             this.applyFilters();
         }
     },
-    
+
     computed: {
         // Filtered data
         filteredRules() {
             return this.rules.filter(rule => {
-                const searchMatch = !this.filters.rules.search || 
+                const searchMatch = !this.filters.rules.search ||
                     rule.name.toLowerCase().includes(this.filters.rules.search.toLowerCase()) ||
                     rule.monitor_name.toLowerCase().includes(this.filters.rules.search.toLowerCase());
-                
+
                 return searchMatch;
             });
         },
-        
+
         filteredMonitors() {
             return Object.entries(this.monitors).filter(([key, monitor]) => {
-                const searchMatch = !this.filters.monitors.search || 
+                const searchMatch = !this.filters.monitors.search ||
                     monitor.monitor_name.toLowerCase().includes(this.filters.monitors.search.toLowerCase()) ||
                     monitor.db_name.toLowerCase().includes(this.filters.monitors.search.toLowerCase());
-                
-                const dbMatch = !this.filters.monitors.db_name || 
+
+                const dbMatch = !this.filters.monitors.db_name ||
                     monitor.db_name === this.filters.monitors.db_name;
-                    
+
                 const disabledMatch = this.filters.monitors.show_disabled || !monitor.is_disabled;
-                
+
                 return searchMatch && dbMatch && disabledMatch;
             });
         },
-        
+
         filteredHistory() {
             return this.history.filter(item => {
-                const searchMatch = !this.filters.history.search || 
+                const searchMatch = !this.filters.history.search ||
                     item.monitor_name.toLowerCase().includes(this.filters.history.search.toLowerCase()) ||
                     item.message.toLowerCase().includes(this.filters.history.search.toLowerCase());
-                
-                const dbMatch = !this.filters.history.db_name || 
+
+                const dbMatch = !this.filters.history.db_name ||
                     item.db_name === this.filters.history.db_name;
-                    
-                const monitorMatch = !this.filters.history.monitor_name || 
+
+                const monitorMatch = !this.filters.history.monitor_name ||
                     item.monitor_name === this.filters.history.monitor_name;
-                
+
                 return searchMatch && dbMatch && monitorMatch;
             });
         },
-        
+
         // Get unique database names for filter dropdowns
         uniqueDbNames() {
             const dbNames = new Set();
@@ -445,14 +479,14 @@ createApp({
             Object.values(this.monitors).forEach(monitor => dbNames.add(monitor.db_name));
             return Array.from(dbNames).sort();
         },
-        
+
         uniqueMonitorNames() {
             const monitorNames = new Set();
             this.rules.forEach(rule => monitorNames.add(rule.monitor_name));
             Object.values(this.monitors).forEach(monitor => monitorNames.add(monitor.monitor_name));
             return Array.from(monitorNames).sort();
         },
-        
+
         // Мониторы для выбранной БД в форме создания правила
         filteredMonitorsForDb() {
             const selectedDb = this.ruleForm.db_name;
@@ -473,7 +507,7 @@ createApp({
             return Array.from(monitorsForDb).sort();
         }
     },
-    
+
     template: `
         <div class="container-fluid">
             <!-- Header -->
@@ -822,6 +856,16 @@ createApp({
                                                             @click="disableMonitor(monitor.monitor_name, monitor.db_name)"
                                                             :disabled="loading">
                                                         <i class="fas fa-ban"></i> Отключить
+                                                    </button>
+                                                    <button class="btn btn-primary btn-sm me-1"
+                                                            @click="createRuleForMonitor(monitor.monitor_name, monitor.db_name)"
+                                                            title="Создать правило">
+                                                        <i class="fas fa-plus"></i>
+                                                    </button>
+                                                    <button class="btn btn-secondary btn-sm"
+                                                            @click="copyMonitorRules(monitor.monitor_name, monitor.db_name)"
+                                                            title="Копировать правила">
+                                                        <i class="fas fa-copy"></i>
                                                     </button>
                                                 </td>
                                             </tr>
