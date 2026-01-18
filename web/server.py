@@ -54,6 +54,7 @@ class MonitorCreate(BaseModel):
 
 class MonitorUpdate(BaseModel):
     name: Optional[str] = None
+    db_name: Optional[str] = None
     sql_query: Optional[str] = None
     check_interval: Optional[int] = None
     is_active: Optional[bool] = None
