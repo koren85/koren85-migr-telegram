@@ -60,13 +60,22 @@ class NotificationRulesEngine:
 
         # Get rules for this monitor
         rules = self.database.get_rules(monitor_name=monitor_name, db_name=db_name, active_only=True)
-        logger.debug(f"Found {len(rules)} active rules for {monitor_key}")
+        logger.info(f"🔍 Looking for rules: monitor_name='{monitor_name}', db_name='{db_name}'")
+        logger.info(f"📋 Found {len(rules)} active rules for {monitor_key}")
+
+        if not rules:
+            logger.warning(f"⚠️ No active rules found for monitor {monitor_key}! Check if rules exist and are active.")
 
         # Process each rule
         for rule in rules:
             logger.debug(f"Checking rule '{rule.name}' (type: {rule.condition_type.value}, cooldown: {rule.cooldown_seconds}s)")
-            if await self._should_trigger_notification(rule, state, old_value, new_value):
+            should_trigger = await self._should_trigger_notification(rule, state, old_value, new_value)
+
+            if should_trigger:
+                logger.info(f"✅ Rule '{rule.name}' triggered for {state.db_name}.{state.monitor_name}")
                 await self._send_notification(rule, state, old_value, new_value)
+            else:
+                logger.debug(f"❌ Rule '{rule.name}' not triggered (condition not met or cooldown active)")
     
     async def _should_trigger_notification(self, rule: NotificationRule,
                                          state: MonitorState, old_value: Any,

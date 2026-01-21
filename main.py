@@ -174,13 +174,16 @@ class DatabaseMonitoringApp:
     
     async def _on_value_change(self, db_name: str, table_column: str, old_value, new_value):
         """Handle value change notifications"""
-        logger.info(f"Value changed in {db_name}.{table_column}: {old_value} -> {new_value}")
-        
+        logger.info(f"📊 Value changed in {db_name}.{table_column}: {old_value} -> {new_value}")
+
         # Process through notification rules engine
         if self.notification_engine:
+            logger.debug(f"Sending change to notification engine: db_name='{db_name}', monitor_name='{table_column}'")
             await self.notification_engine.process_value_change(
                 db_name, table_column, old_value, new_value
             )
+        else:
+            logger.warning("⚠️ Notification engine is not initialized!")
     
     async def sync_monitor_states(self):
         """Sync current states from database monitors to notification engine"""
@@ -190,18 +193,18 @@ class DatabaseMonitoringApp:
         for db_name, monitor in self.monitors.items():
             if hasattr(monitor, 'monitor_states'):
                 for monitor_key, db_state in monitor.monitor_states.items():
-                    # Force sync current state to rules engine
-                    engine_key = f"{db_name}.{db_state.monitor_name}"
-                    if engine_key not in self.notification_engine.monitor_states:
+                    # monitor_key is already in format: db_name.monitor_name
+                    # No need to reconstruct it
+                    if monitor_key not in self.notification_engine.monitor_states:
                         from notifications.models import MonitorState
-                        self.notification_engine.monitor_states[engine_key] = MonitorState(
+                        self.notification_engine.monitor_states[monitor_key] = MonitorState(
                             monitor_name=db_state.monitor_name,
                             db_name=db_name,
                             current_value=getattr(db_state, 'last_value', None)
                         )
                     else:
                         # Update existing state
-                        engine_state = self.notification_engine.monitor_states[engine_key]
+                        engine_state = self.notification_engine.monitor_states[monitor_key]
                         engine_state.current_value = getattr(db_state, 'last_value', None)
         
         logger.debug("Monitor states synchronized")

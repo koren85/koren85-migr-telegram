@@ -42,8 +42,10 @@ class DatabaseMonitor:
                 # Legacy format
                 monitor_name = f"{table_config.table}.{table_config.column}"
                 sql_query = f"SELECT {table_config.column} FROM {table_config.table} LIMIT 1"
-            
-            self.monitor_states[monitor_name] = MonitorState(
+
+            # Use unified key format: db_name.monitor_name
+            monitor_key = f"{db_config.name}.{monitor_name}"
+            self.monitor_states[monitor_key] = MonitorState(
                 database_name=db_config.name,
                 monitor_name=monitor_name,
                 sql_query=sql_query,
@@ -192,7 +194,13 @@ class DatabaseMonitor:
     
     async def get_current_value(self, monitor_name: str) -> Optional[Any]:
         """Get current value for manual requests"""
-        if monitor_name in self.monitor_states:
+        # Try with db_name prefix first (new format)
+        monitor_key = f"{self.db_config.name}.{monitor_name}"
+        if monitor_key in self.monitor_states:
+            state = self.monitor_states[monitor_key]
+            return await self._get_table_value_async(state)
+        # Fallback to direct lookup (compatibility)
+        elif monitor_name in self.monitor_states:
             state = self.monitor_states[monitor_name]
             return await self._get_table_value_async(state)
         return None

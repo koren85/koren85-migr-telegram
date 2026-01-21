@@ -67,6 +67,11 @@ class MonitorUpdate(BaseModel):
     jar_path: Optional[str] = None
 
 
+class RuleCopyRequest(BaseModel):
+    target_monitor_name: Optional[str] = None  # If provided, copy rule to this monitor
+    target_db_name: Optional[str] = None  # If provided, use this db_name
+
+
 class NotificationStats(BaseModel):
     total_rules: int
     active_rules: int
@@ -198,8 +203,16 @@ def create_app(rules_engine: NotificationRulesEngine = None, app_instance = None
         
         logger.info(f"Before update: monitor_name={existing_rule.monitor_name}, db_name={existing_rule.db_name}")
         
-        # Update fields
-        for field, value in rule_data.model_dump(exclude_unset=True).items():
+        # Update fields - preserve monitor_name and db_name if not provided
+        update_data = rule_data.model_dump(exclude_unset=True)
+
+        # Ensure critical fields are preserved if not explicitly updated
+        if 'monitor_name' not in update_data and existing_rule.monitor_name:
+            update_data['monitor_name'] = existing_rule.monitor_name
+        if 'db_name' not in update_data and existing_rule.db_name:
+            update_data['db_name'] = existing_rule.db_name
+
+        for field, value in update_data.items():
             setattr(existing_rule, field, value)
         
         logger.info(f"After update: monitor_name={existing_rule.monitor_name}, db_name={existing_rule.db_name}")
@@ -225,21 +238,41 @@ def create_app(rules_engine: NotificationRulesEngine = None, app_instance = None
     @app.post("/api/rules/{rule_id}/copy", response_model=dict)
     async def copy_rule(
         rule_id: int,
+        copy_request: Optional[RuleCopyRequest] = None,
         db: NotificationDatabase = Depends(get_database)
     ):
-        """Copy notification rule with new name"""
+        """Copy notification rule with new name and optionally to different monitor"""
         # Get existing rule
         existing_rules = db.get_rules(active_only=False)
         existing_rule = next((r for r in existing_rules if r.id == rule_id), None)
-        
+
         if not existing_rule:
             raise HTTPException(status_code=404, detail="Rule not found")
-        
+
+        # Determine target monitor and db_name
+        target_monitor_name = existing_rule.monitor_name
+        target_db_name = existing_rule.db_name
+
+        if copy_request:
+            if copy_request.target_monitor_name:
+                target_monitor_name = copy_request.target_monitor_name
+            if copy_request.target_db_name:
+                target_db_name = copy_request.target_db_name
+
+        # Validate that target monitor exists
+        monitors = db.get_monitors(db_name=target_db_name, active_only=False)
+        monitor_exists = any(m.name == target_monitor_name for m in monitors)
+
+        if not monitor_exists:
+            logger.warning(f"Target monitor {target_monitor_name} in {target_db_name} does not exist")
+            # Still allow creation for flexibility, but warn
+
         # Create a copy with modified name
+        rule_suffix = " (копия)" if target_monitor_name == existing_rule.monitor_name else f" (для {target_monitor_name})"
         new_rule = NotificationRule(
-            name=f"{existing_rule.name} (копия)",
-            monitor_name=existing_rule.monitor_name,
-            db_name=existing_rule.db_name,
+            name=f"{existing_rule.name}{rule_suffix}",
+            monitor_name=target_monitor_name,
+            db_name=target_db_name,
             condition_type=existing_rule.condition_type,
             condition_value=existing_rule.condition_value,
             condition_duration=existing_rule.condition_duration,
@@ -249,9 +282,10 @@ def create_app(rules_engine: NotificationRulesEngine = None, app_instance = None
             target_chats=existing_rule.target_chats,
             is_active=existing_rule.is_active
         )
-        
+
         new_rule_id = db.create_rule(new_rule)
-        return {"id": new_rule_id, "message": "Rule copied successfully"}
+        logger.info(f"Copied rule {existing_rule.name} to {new_rule.name} for monitor {target_monitor_name}")
+        return {"id": new_rule_id, "message": "Rule copied successfully", "monitor_name": target_monitor_name}
     
     @app.delete("/api/monitors/{monitor_name}/disable")
     async def disable_monitor(
@@ -435,8 +469,18 @@ def create_app(rules_engine: NotificationRulesEngine = None, app_instance = None
             if not existing_monitor:
                 raise HTTPException(status_code=404, detail="Monitor not found")
 
-            # Update fields
-            for field, value in monitor_data.model_dump(exclude_unset=True).items():
+            # Update fields - preserve critical fields if not provided
+            update_data = monitor_data.model_dump(exclude_unset=True)
+
+            # Ensure critical fields are preserved if not explicitly updated
+            if 'name' not in update_data and existing_monitor.name:
+                update_data['name'] = existing_monitor.name
+            if 'db_name' not in update_data and existing_monitor.db_name:
+                update_data['db_name'] = existing_monitor.db_name
+            if 'sql_query' not in update_data and existing_monitor.sql_query:
+                update_data['sql_query'] = existing_monitor.sql_query
+
+            for field, value in update_data.items():
                 setattr(existing_monitor, field, value)
 
             success = db.update_monitor(existing_monitor)
@@ -531,7 +575,34 @@ def create_app(rules_engine: NotificationRulesEngine = None, app_instance = None
             )
             
             new_monitor_id = db.create_monitor(new_monitor)
-            return {"id": new_monitor_id, "message": "Monitor copied successfully"}
+
+            # Automatically copy rules from original monitor
+            original_rules = db.get_rules(monitor_name=existing_monitor.name, db_name=existing_monitor.db_name, active_only=False)
+            copied_rules = 0
+            for rule in original_rules:
+                # Create a copy of the rule for the new monitor
+                from notifications.models import NotificationRule
+                new_rule = NotificationRule(
+                    name=f"{rule.name} (для {copy_name})",
+                    monitor_name=copy_name,  # Point to the new monitor
+                    db_name=rule.db_name,
+                    condition_type=rule.condition_type,
+                    condition_value=rule.condition_value,
+                    condition_duration=rule.condition_duration,
+                    cooldown_seconds=rule.cooldown_seconds,
+                    priority=rule.priority,
+                    message_template=rule.message_template,
+                    target_chats=rule.target_chats,
+                    is_active=False  # Disabled by default to match monitor state
+                )
+                try:
+                    db.create_rule(new_rule)
+                    copied_rules += 1
+                except Exception as e:
+                    logger.warning(f"Failed to copy rule {rule.name}: {e}")
+
+            logger.info(f"Copied monitor {existing_monitor.name} to {copy_name} with {copied_rules} rules")
+            return {"id": new_monitor_id, "message": f"Monitor copied successfully with {copied_rules} rules", "rules_copied": copied_rules}
             
         except HTTPException:
             raise

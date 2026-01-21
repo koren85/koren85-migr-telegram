@@ -117,6 +117,13 @@ class NotificationDatabase:
     
     def create_rule(self, rule: NotificationRule) -> int:
         """Create a new notification rule"""
+        # Validate that the monitor exists
+        if rule.monitor_name and rule.db_name:
+            monitors = self.get_monitors(db_name=rule.db_name, active_only=False)
+            monitor_exists = any(m.name == rule.monitor_name for m in monitors)
+            if not monitor_exists:
+                logger.warning(f"Creating rule for non-existent monitor: {rule.db_name}.{rule.monitor_name}")
+
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute("""
                 INSERT INTO notification_rules 
