@@ -799,6 +799,62 @@ def create_app(rules_engine: NotificationRulesEngine = None, app_instance = None
             current_value=test_new_value,
             same_value_duration=0 if test_old_value != test_new_value else 3600  # Simulate 1 hour
         )
+
+        # If values are not provided, try to fetch real data
+        fetched_real_data = False
+        error_fetching_data = None
+        
+        if not test_new_value:
+            try:
+                # 1. Get monitor config
+                # We need to access database directly here since we don't have db instance injected in engine
+                # But we can use the db dependency passed to this function
+                from notifications.models import DatabaseMonitorConfig
+                monitor = db.get_monitor_by_name(rule_data.monitor_name, rule_data.db_name)
+                
+                if monitor:
+                    # 2. Connect to database
+                    from database.connection import DatabaseConnection
+                    from config.settings import DatabaseConfig
+                    
+                    db_config = DatabaseConfig(
+                        name=monitor.db_name,
+                        driver=monitor.driver or "",
+                        url=monitor.url or "",
+                        username=monitor.username or "",
+                        password=monitor.password or "",
+                        jar_path=monitor.jar_path or "",
+                        tables=[]  # Not needed for raw query
+                    )
+                    
+                    connection = DatabaseConnection(db_config)
+                    
+                    if connection.connect():
+                        try:
+                            # 3. Execute query
+                            result = connection.execute_query(monitor.sql_query)
+                            if result is not None:
+                                test_new_value = str(result)
+                                test_state.current_value = test_new_value
+                                fetched_real_data = True
+                        finally:
+                            connection.disconnect()
+            except Exception as e:
+                logger.error(f"Error fetching real data for test: {e}")
+                error_fetching_data = str(e)
+                
+            # Try to get old value from engine state
+            if not test_old_value:
+                current_state_key = engine.get_monitor_key(rule_data.db_name, rule_data.monitor_name)
+                if current_state_key in engine.monitor_states:
+                    real_state = engine.monitor_states[current_state_key]
+                    if real_state.current_value is not None:
+                        # Use current real value as old value for test
+                        test_old_value = str(real_state.current_value)
+                        
+                        # If we failed to get new value, maybe use it as new value too?
+                        # No, if we failed to get new value, we leave it empty to show error
+
         
         would_trigger = await engine._evaluate_condition(temp_rule, test_state, test_old_value, test_new_value)
         formatted_message = await engine._format_message(temp_rule.message_template, temp_rule, test_state, test_old_value, test_new_value)

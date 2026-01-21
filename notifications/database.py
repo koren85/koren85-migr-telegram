@@ -453,6 +453,31 @@ class NotificationDatabase:
             """, (name, db_name))
             return cursor.fetchone() is not None
 
+    def get_monitor_by_name(self, name: str, db_name: str) -> Optional[DatabaseMonitorConfig]:
+        """Get monitor by name and db_name"""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute("SELECT * FROM monitors WHERE name = ? AND db_name = ?", (name, db_name))
+            row = cursor.fetchone()
+            
+            if row:
+                return DatabaseMonitorConfig(
+                    id=row['id'],
+                    name=row['name'],
+                    db_name=row['db_name'],
+                    sql_query=row['sql_query'],
+                    check_interval=row['check_interval'],
+                    is_active=bool(row['is_active']),
+                    driver=row['driver'],
+                    url=row['url'],
+                    username=row['username'],
+                    password=row['password'],
+                    jar_path=row['jar_path'],
+                    created_at=datetime.fromisoformat(row['created_at']) if row['created_at'] else None,
+                    updated_at=datetime.fromisoformat(row['updated_at']) if row['updated_at'] else None
+                )
+            return None
+
     def migrate_from_config(self, settings) -> int:
         """Migrate monitors from config.yaml to database (one-time operation)"""
         migrated_count = 0
