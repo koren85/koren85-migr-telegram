@@ -1,0 +1,60 @@
+{
+  "mcpServers": {
+    "filesystem-about-redmine": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/Users/aleksandrcernaev/projects/about_redmine"
+      ]
+    },
+    "filesystem-migr-telegram": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/Users/aleksandrcernaev/projects/migr-telegram"
+      ]
+    },
+    "sqlite-migr-telegram": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sqlite",
+        "/Users/aleksandrcernaev/projects/migr-telegram/data/notifications.db"
+      ]
+    },
+    "fetch": {
+      "command": "/Users/aleksandrcernaev/.local/bin/uvx",
+      "args": ["mcp-server-fetch", "--ignore-robots-txt"]
+    },
+    "mcp-hfspace": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@llmindset/mcp-hfspace",
+        "--work-dir=/Users/aleksandrcernaev/mcpservers/hwf",
+        "--HF_TOKEN=HF_{optional token}",
+        "Qwen/Qwen2-72B-Instruct",
+        "black-forest-labs/FLUX.1-schnell",
+        "space/example/specific-endpint"
+      ]
+    },
+    "postgres-redmine": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-postgres",
+        "postgresql://redmine:redmine@localhost:5432/redmine_dev2"
+      ]
+    },
+    "postgres-irk-migr": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-postgres",
+        "postgresql://tomcat:G18sBB07uK@10.209.109.137:5436/migration"
+      ]
+    }
+  }
+}

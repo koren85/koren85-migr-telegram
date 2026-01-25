@@ -27,6 +27,12 @@ class RuleCreate(BaseModel):
     is_active: bool = True
 
 
+class RuleTest(RuleCreate):
+    """Extended RuleCreate for testing with optional test values"""
+    test_old_value: Optional[str] = None
+    test_new_value: Optional[str] = None
+
+
 class RuleUpdate(BaseModel):
     name: Optional[str] = None
     monitor_name: Optional[str] = None
@@ -772,12 +778,17 @@ def create_app(rules_engine: NotificationRulesEngine = None, app_instance = None
     
     @app.post("/api/test-rule", response_model=dict)
     async def test_rule(
-        rule_data: RuleCreate,
-        test_old_value: str = "",
-        test_new_value: str = "",
+        rule_data: RuleTest,
+        db: NotificationDatabase = Depends(get_database),
         engine: NotificationRulesEngine = Depends(get_rules_engine)
     ):
         """Test a notification rule with sample values"""
+        # Get test values from request body (now properly included in RuleTest model)
+        test_old_value = rule_data.test_old_value
+        test_new_value = rule_data.test_new_value
+        
+        logger.info(f"Test rule called: monitor_name={rule_data.monitor_name}, db_name={rule_data.db_name}, test_old_value={test_old_value}, test_new_value={test_new_value}")
+        
         # Create temporary rule (don't save to database)
         temp_rule = NotificationRule(
             name=rule_data.name,
@@ -803,16 +814,20 @@ def create_app(rules_engine: NotificationRulesEngine = None, app_instance = None
         # If values are not provided, try to fetch real data
         fetched_real_data = False
         error_fetching_data = None
+        monitor_found = False
         
         if not test_new_value:
             try:
                 # 1. Get monitor config
-                # We need to access database directly here since we don't have db instance injected in engine
-                # But we can use the db dependency passed to this function
                 from notifications.models import DatabaseMonitorConfig
+                logger.info(f"Looking for monitor: name='{rule_data.monitor_name}', db_name='{rule_data.db_name}'")
                 monitor = db.get_monitor_by_name(rule_data.monitor_name, rule_data.db_name)
                 
                 if monitor:
+                    monitor_found = True
+                    logger.info(f"Found monitor: id={monitor.id}, name={monitor.name}, db_name={monitor.db_name}")
+                    logger.info(f"Monitor SQL: {monitor.sql_query}")
+                    
                     # 2. Connect to database
                     from database.connection import DatabaseConnection
                     from config.settings import DatabaseConfig
@@ -833,12 +848,20 @@ def create_app(rules_engine: NotificationRulesEngine = None, app_instance = None
                         try:
                             # 3. Execute query
                             result = connection.execute_query(monitor.sql_query)
+                            logger.info(f"Query result: {result}")
                             if result is not None:
                                 test_new_value = str(result)
                                 test_state.current_value = test_new_value
                                 fetched_real_data = True
+                                logger.info(f"Successfully fetched real data: {test_new_value}")
                         finally:
                             connection.disconnect()
+                    else:
+                        error_fetching_data = "Failed to connect to database"
+                        logger.error(error_fetching_data)
+                else:
+                    error_fetching_data = f"Monitor not found: name='{rule_data.monitor_name}', db_name='{rule_data.db_name}'"
+                    logger.warning(error_fetching_data)
             except Exception as e:
                 logger.error(f"Error fetching real data for test: {e}")
                 error_fetching_data = str(e)
@@ -846,14 +869,15 @@ def create_app(rules_engine: NotificationRulesEngine = None, app_instance = None
             # Try to get old value from engine state
             if not test_old_value:
                 current_state_key = engine.get_monitor_key(rule_data.db_name, rule_data.monitor_name)
+                logger.info(f"Looking for engine state with key: {current_state_key}")
                 if current_state_key in engine.monitor_states:
                     real_state = engine.monitor_states[current_state_key]
                     if real_state.current_value is not None:
                         # Use current real value as old value for test
                         test_old_value = str(real_state.current_value)
-                        
-                        # If we failed to get new value, maybe use it as new value too?
-                        # No, if we failed to get new value, we leave it empty to show error
+                        logger.info(f"Got old value from engine state: {test_old_value}")
+                else:
+                    logger.info(f"No engine state found. Available keys: {list(engine.monitor_states.keys())}")
 
         
         would_trigger = await engine._evaluate_condition(temp_rule, test_state, test_old_value, test_new_value)
@@ -865,6 +889,11 @@ def create_app(rules_engine: NotificationRulesEngine = None, app_instance = None
             "test_values": {
                 "old_value": test_old_value,
                 "new_value": test_new_value
+            },
+            "debug": {
+                "monitor_found": monitor_found,
+                "fetched_real_data": fetched_real_data,
+                "error_fetching_data": error_fetching_data
             }
         }
     
