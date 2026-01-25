@@ -1017,7 +1017,7 @@ def create_app(rules_engine: NotificationRulesEngine = None, app_instance = None
             return {"success": False, "error": str(e)}
 
     @app.post("/api/rules/{rule_id}/test")
-    async def test_single_rule(rule_id: int, engine: NotificationRulesEngine = Depends(get_rules_engine)):
+    async def test_single_rule(rule_id: int, engine: NotificationRulesEngine = Depends(get_rules_engine), db: NotificationDatabase = Depends(get_database)):
         """Send test notification for a specific rule"""
         try:
             # Get rule
@@ -1035,8 +1035,57 @@ def create_app(rules_engine: NotificationRulesEngine = None, app_instance = None
             state = engine.monitor_states.get(monitor_key)
 
             # Get real or test values
-            test_old = state.previous_value if state else "old_value"
-            test_new = state.current_value if state else "new_value"
+            test_old = state.previous_value if state and state.previous_value is not None else None
+            test_new = state.current_value if state and state.current_value is not None else None
+
+            # If values are not available from state, try to fetch real data from database
+            if test_new is None:
+                try:
+                    # Get monitor config
+                    logger.info(f"No state available for {monitor_key}, fetching real data from database")
+                    monitor = db.get_monitor_by_name(rule.monitor_name, rule.db_name)
+                    
+                    if monitor:
+                        logger.info(f"Found monitor: id={monitor.id}, name={monitor.name}, db_name={monitor.db_name}")
+                        
+                        # Connect to database and execute query
+                        from database.connection import DatabaseConnection
+                        from config.settings import DatabaseConfig
+                        
+                        db_config = DatabaseConfig(
+                            name=monitor.db_name,
+                            driver=monitor.driver or "",
+                            url=monitor.url or "",
+                            username=monitor.username or "",
+                            password=monitor.password or "",
+                            jar_path=monitor.jar_path or "",
+                            tables=[]
+                        )
+                        
+                        connection = DatabaseConnection(db_config)
+                        
+                        if connection.connect():
+                            try:
+                                # Execute query to get real data
+                                result = connection.execute_query(monitor.sql_query)
+                                logger.info(f"Query result: {result}")
+                                if result is not None:
+                                    test_new = str(result)
+                                    logger.info(f"Successfully fetched real data: {test_new}")
+                            finally:
+                                connection.disconnect()
+                        else:
+                            logger.warning(f"Failed to connect to database for {monitor_key}")
+                    else:
+                        logger.warning(f"Monitor not found: name='{rule.monitor_name}', db_name='{rule.db_name}'")
+                except Exception as e:
+                    logger.error(f"Error fetching real data for test: {e}")
+            
+            # If still no values, use placeholders as last resort
+            if test_new is None:
+                test_new = "new_value"
+            if test_old is None:
+                test_old = "old_value"
 
             # Create a temporary state if needed for message formatting
             if not state:

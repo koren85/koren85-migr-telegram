@@ -3,6 +3,7 @@ FROM python:3.12.12-slim-bookworm
 
 # Устанавливаем системные зависимости
 RUN apt-get update && apt-get install -y \
+    build-essential \
     openjdk-17-jdk \
     curl \
     && rm -rf /var/lib/apt/lists/*
